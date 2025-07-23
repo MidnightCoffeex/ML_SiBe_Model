@@ -100,6 +100,15 @@ def run_pipeline(raw_dir: str, output_path: str) -> None:
     features.to_parquet(output_path, index=False)
 
 
+def create_features(raw_dir: str, output_path: str = "data/features.parquet") -> None:
+    """Convenience wrapper for ``run_pipeline``.
+
+    This function mirrors the interface expected by command-line wrappers and
+    simply executes :func:`run_pipeline` with the provided arguments.
+    """
+    run_pipeline(raw_dir, output_path)
+
+
 if __name__ == "__main__":
     import argparse
 

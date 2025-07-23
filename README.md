@@ -35,20 +35,32 @@ python3.11 -m pip install pandas numpy scikit-learn matplotlib
 
 ## Running the pipeline
 
-A preprocessing pipeline can be executed with:
+To generate the feature table from the raw CSV files use the wrapper in
+`scripts/`:
 
 ```bash
-python3.11 pipeline.py --input Rohdaten --output data/processed
+python3.11 scripts/build_features.py --input Rohdaten --output data/features.parquet
 ```
 
-This reads the raw CSV files and creates processed data in `data/processed/`.
+The command reads the raw CSV files and saves a merged feature file to
+`data/features.parquet`.
 
 ## Training models
 
-After preprocessing, run the training script:
+After preprocessing, train the model via:
 
 ```bash
-python3.11 train_model.py --data data/processed
+python3.11 scripts/train.py --data data/features.parquet
 ```
 
-This trains the ML model using the processed dataset and saves outputs to `models/`.
+This trains the ML model using the processed dataset and writes the resulting
+model to `models/`.
+
+## Evaluating the model
+
+Once a model has been trained, run the evaluation script to compute metrics and
+create diagnostic plots:
+
+```bash
+python3.11 scripts/evaluate.py --data data/features.parquet --model models/gb_regressor.joblib --plots plots
+```
