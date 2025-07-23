@@ -1,0 +1,15 @@
+# Ignore raw data
+Rohdaten/
+
+# Python artifacts
+__pycache__/
+*.pyc
+
+# Temporary files and directories
+*.tmp
+tmp/
+Temp/
+*.log
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
