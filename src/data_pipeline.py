@@ -35,6 +35,8 @@ def load_csv_file(path: str, part: str | None = None) -> pd.DataFrame:
         df = df[df['Lagerort'].astype(str).str.strip() == '120']
     for col in df.columns:
         df[col] = _convert_comma_decimal(df[col])
+    if 'Teil' in df.columns and df['Teil'].duplicated().any():
+        df = df.drop_duplicates(subset='Teil', keep='first')
     return df
 
 
