@@ -58,11 +58,12 @@ is available or process only a subset of files.
 - scikit-learn
 - Matplotlib
 - pyarrow
+- openpyxl (for Excel output)
 
 Install the dependencies with pip:
 
 ```bash
-python3.11 -m pip install pandas numpy scikit-learn matplotlib pyarrow
+python3.11 -m pip install pandas numpy scikit-learn matplotlib pyarrow openpyxl
 ```
 
 ### Local setup
@@ -86,8 +87,13 @@ To generate the feature table from the raw CSV files use the wrapper in
 python3.11 scripts/build_features.py --input Rohdaten --output data/features.parquet
 ```
 
-The command reads the raw CSV files and saves a merged feature file to
-`data/features.parquet`.
+The command reads the raw CSV files and saves a merged feature file.  The output
+format depends on the filename: use ``.parquet`` (default) for a Parquet file,
+``.csv`` for CSV or ``.xlsx`` for an Excel workbook.  For example:
+
+```bash
+python3.11 scripts/build_features.py --input Rohdaten --output data/features.csv
+```
 
 ## Training models
 

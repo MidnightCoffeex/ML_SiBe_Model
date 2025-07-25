@@ -96,10 +96,21 @@ def build_features(directory: str) -> pd.DataFrame:
 
 
 def run_pipeline(raw_dir: str, output_path: str) -> None:
-    """Run complete preprocessing pipeline."""
+    """Run complete preprocessing pipeline and save features.
+
+    The output format is determined by the file extension. ``.parquet`` (default)
+    writes a Parquet file, ``.csv`` saves to CSV and ``.xlsx`` writes an Excel
+    workbook.
+    """
     features = build_features(raw_dir)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    features.to_parquet(output_path, index=False)
+    ext = Path(output_path).suffix.lower()
+    if ext == ".csv":
+        features.to_csv(output_path, index=False)
+    elif ext in {".xlsx", ".xls"}:
+        features.to_excel(output_path, index=False)
+    else:
+        features.to_parquet(output_path, index=False)
 
 
 def create_features(raw_dir: str, output_path: str = "data/features.parquet") -> None:
