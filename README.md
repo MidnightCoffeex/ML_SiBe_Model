@@ -3,6 +3,13 @@
 This repository contains raw CSV files for a machine learning project.
 The folder `Rohdaten/` holds the source data while `Spaltenbedeutung.xlsx` explains each column.
 
+## Project overview
+
+The goal is to predict an optimal *Sicherheitsbestand* (safety stock) for each
+part on specific dates.  A preprocessing pipeline converts the raw CSV exports
+into a single feature table.  On top of these features a Gradient Boosting
+model is trained to suggest suitable safety stock levels.
+
 ## Dataset structure
 
 ```
@@ -18,6 +25,26 @@ Spaltenbedeutung.xlsx   # Excel sheet describing columns
 ```
 
 CSV files are semicolon separated and contain inventory and planning data.
+
+## Pipeline and features
+
+Each CSV file name starts with a date in ``YYYYMMDD`` format followed by the
+dataset type and in some cases a part number.  The pipeline parses these
+filenames, loads the tables and filters for warehouse location ``120`` via the
+``Lagerort`` column.  Decimal numbers written with commas are converted to
+standard floating point values.
+
+Tables of the same date are merged on the column ``Teil``.  Column names are
+prefixed with the dataset name (e.g. ``Bestand_Bestand`` for the end-of-day
+inventory or ``Dispo_Deckungsmenge`` for planned receipts).  Important features
+include:
+
+- **Bestand_Bestand** – current stock at the end of the day
+- **Dispo_Bedarfsmenge / Dispo_Deckungsmenge** – planned demand and supply
+- **SiBe_Sicherheitsbest** – recorded safety stock (target for training)
+
+The resulting table contains one row per part and date and forms the input for
+model training.
 
 Processing all raw files can require substantial memory depending on the
 number of dates included. When running the full dataset, ensure enough RAM
@@ -37,6 +64,18 @@ Install the dependencies with pip:
 ```bash
 python3.11 -m pip install pandas numpy scikit-learn matplotlib pyarrow
 ```
+
+### Local setup
+
+Clone the repository and install the packages listed in ``requirements.txt``:
+
+```bash
+git clone <repository-url>
+cd AGENTS_MAKE_ML
+python3.11 -m pip install -r requirements.txt
+```
+
+All scripts assume Python 3.11 or later.
 
 ## Running the pipeline
 
@@ -59,7 +98,10 @@ python3.11 scripts/train.py --data data/features.parquet
 ```
 
 This trains the ML model using the processed dataset and writes the resulting
-model to `models/`.
+model to `models/`.  ``src/train_model.py`` uses a
+``GradientBoostingRegressor`` from scikit‑learn.  The data is split into a
+training and validation set to report a mean absolute error (MAE) on the
+validation split.
 
 ## Evaluating the model
 
@@ -69,3 +111,21 @@ create diagnostic plots:
 ```bash
 python3.11 scripts/evaluate.py --data data/features.parquet --model models/gb_regressor.joblib --plots plots
 ```
+
+The script reports the MAE on a test split and writes several plot files to the
+specified directory:
+
+- ``actual_vs_pred.png`` – scatter plot of predicted versus actual values
+- ``training_history.png`` – model deviance over boosting iterations
+- ``predictions_over_time.png`` – comparison of predictions and actual values
+  by date
+
+## Known limitations
+
+- Only rows with ``Lagerort`` 120 are processed.
+- Date information is extracted from the filename and must follow the
+  ``YYYYMMDD`` pattern.
+- The raw exports need to be complete; missing tables for a date lead to sparse
+  feature rows.
+- Building the feature set for many dates can require several gigabytes of
+  memory.  If resource limits are reached, process only a subset of the files.
