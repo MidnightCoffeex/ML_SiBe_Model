@@ -15,7 +15,6 @@ def run_evaluation(
 ) -> None:
     """Evaluate the trained model on a test split and generate plots."""
     df = load_features(features_path)
-    df = df.dropna(subset=[target])
     X, y = prepare_data(df, target)
 
     X_train, X_test, y_train, y_test = train_test_split(
