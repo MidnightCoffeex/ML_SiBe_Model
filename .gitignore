@@ -13,3 +13,9 @@ Temp/
 
 # Jupyter notebooks checkpoints
 .ipynb_checkpoints/
+
+# Generated files
+# Ignore processed data, trained models and plots
+data/
+models/
+plots/
