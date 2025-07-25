@@ -1,0 +1,14 @@
+Pipeline konnte mit kompletten Rohdaten nicht erfolgreich ausgeführt werden. Der Vorgang wurde nach längerer Rechenzeit beendet (möglicherweise durch Ressourcenbegrenzungen). Mit einer kleineren Teilmenge der Dateien funktioniert der Ablauf jedoch.
+
+Beim ersten Aufruf der Skripte trat ein Importfehler (``ModuleNotFoundError: No module named 'src'``) auf. Die Pfade wurden in den Skripten ergänzt, damit sie direkt per ``python`` ausführbar sind.
+
+Zum Speichern der Parquet-Datei wird ein zusätzliches Paket benötigt (``pyarrow``). Ohne dieses erscheint eine Fehlermeldung.
+
+Beim Training schlug der erste Versuch fehl, weil die Zielspalte ``SiBe_Sicherheitsbest`` teilweise fehlende Werte enthielt. Nach dem Entfernen dieser Zeilen konnte das Modell trainiert werden (Validierungs-MAE ca. 0.005).
+
+Auch die Auswertung musste zuvor fehlende Werte entfernen. Die erzeugten Plots (``actual_vs_pred.png``, ``training_history.png`` und ``predictions_over_time.png``) wurden korrekt angelegt.
+
+Verbesserungsvorschläge:
+- Abhängigkeit ``pyarrow`` in ``requirements.txt`` aufnehmen.
+- Fehlende Zielwerte bereits in ``prepare_data`` behandeln oder in der Pipeline bereinigen.
+- Hinweis in der Dokumentation, dass bei großen Datenmengen erheblicher Speicherbedarf entsteht.

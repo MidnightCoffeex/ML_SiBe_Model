@@ -32,6 +32,7 @@ def train_model(X: pd.DataFrame, y: pd.Series) -> GradientBoostingRegressor:
 
 def run_training(features_path: str, model_path: str, target: str) -> None:
     df = load_features(features_path)
+    df = df.dropna(subset=[target])
     X, y = prepare_data(df, target)
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, random_state=0
