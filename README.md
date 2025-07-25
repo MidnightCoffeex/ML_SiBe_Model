@@ -19,6 +19,10 @@ Spaltenbedeutung.xlsx   # Excel sheet describing columns
 
 CSV files are semicolon separated and contain inventory and planning data.
 
+Processing all raw files can require substantial memory depending on the
+number of dates included. When running the full dataset, ensure enough RAM
+is available or process only a subset of files.
+
 ## Required software
 
 - Python 3.11
@@ -26,11 +30,12 @@ CSV files are semicolon separated and contain inventory and planning data.
 - NumPy
 - scikit-learn
 - Matplotlib
+- pyarrow
 
 Install the dependencies with pip:
 
 ```bash
-python3.11 -m pip install pandas numpy scikit-learn matplotlib
+python3.11 -m pip install pandas numpy scikit-learn matplotlib pyarrow
 ```
 
 ## Running the pipeline
