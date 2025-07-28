@@ -28,6 +28,7 @@ def run_evaluation(
     mae = mean_absolute_error(y.iloc[test_idx], y_pred, multioutput="raw_values")
     rmse = np.sqrt(mean_squared_error(y.iloc[test_idx], y_pred, multioutput="raw_values"))
     print("Test MAE:", mae)
+    print("Test RMSE:", rmse)
 
     results = pd.DataFrame(y.iloc[test_idx].copy())
     for i, col in enumerate(targets):
