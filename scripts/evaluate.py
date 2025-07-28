@@ -12,7 +12,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate trained model")
     parser.add_argument("--data", help="Features parquet file")
     parser.add_argument("--model", help="Trained model file")
-    parser.add_argument("--target", default="SiBe", help="Target column")
+    parser.add_argument(
+        "--target",
+        default="Hinterlegter SiBe",
+        help="Target column",
+    )
     parser.add_argument("--plots", help="Directory to store plots")
     args = parser.parse_args()
 
