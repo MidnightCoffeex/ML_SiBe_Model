@@ -4,31 +4,35 @@ from pathlib import Path
 import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import mean_absolute_error
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.model_selection import TimeSeriesSplit
 import pandas as pd
+import numpy as np
 
 from .train_model import load_features, prepare_data
 
 
 def run_evaluation(
-    features_path: str, model_path: str, target: str, output_dir: str
+    features_path: str, model_path: str, targets: list[str], output_dir: str
 ) -> None:
     """Evaluate the trained model on a test split and generate plots."""
     df = load_features(features_path)
-    X, y = prepare_data(df, target)
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=0
-    )
-
+    X, y = prepare_data(df, targets)
+    tscv = TimeSeriesSplit(n_splits=3)
+    splits = list(tscv.split(X))
+    train_idx, val_idx = splits[-2]
+    train_full_idx, test_idx = splits[-1]
     model = joblib.load(model_path)
 
-    y_pred = model.predict(X_test)
-    mae = mean_absolute_error(y_test, y_pred)
-    print(f"Test MAE: {mae:.3f}")
+    y_pred = model.predict(X.iloc[test_idx])
+    mae = mean_absolute_error(y.iloc[test_idx], y_pred, multioutput="raw_values")
+    rmse = np.sqrt(mean_squared_error(y.iloc[test_idx], y_pred, multioutput="raw_values"))
+    print("Test MAE:", mae)
+    print("Test RMSE:", rmse)
 
-    results = pd.DataFrame({"Actual": y_test, "Predicted": y_pred})
+    results = pd.DataFrame(y.iloc[test_idx].copy())
+    for i, col in enumerate(targets):
+        results[f"pred_{col}"] = y_pred[:, i]
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     results.to_csv(Path(output_dir) / "predictions.csv", index=False)
@@ -39,9 +43,9 @@ def run_evaluation(
 
     # Actual vs predicted scatter plot
     plt.figure()
-    sns.scatterplot(x=y_test, y=y_pred)
-    plt.xlabel("Actual Safety Stock")
-    plt.ylabel("Predicted Safety Stock")
+    sns.scatterplot(x=y.iloc[test_idx][targets[0]], y=y_pred[:, 0])
+    plt.xlabel(f"Actual {targets[0]}")
+    plt.ylabel(f"Predicted {targets[0]}")
     plt.title("Actual vs Predicted")
     plt.tight_layout()
     plt.savefig(Path(output_dir) / "actual_vs_pred.png")
@@ -58,14 +62,14 @@ def run_evaluation(
 
     # Predicted vs actual over time
     if "Datum" in df.columns:
-        test_df = df.loc[X_test.index].copy()
-        test_df["predicted"] = y_pred
+        test_df = df.loc[y.iloc[test_idx].index].copy()
+        test_df["predicted"] = y_pred[:, 0]
         test_df = test_df.sort_values("Datum")
         plt.figure()
-        sns.lineplot(x="Datum", y=target, data=test_df, label="Actual")
+        sns.lineplot(x="Datum", y=targets[0], data=test_df, label="Actual")
         sns.lineplot(x="Datum", y="predicted", data=test_df, label="Predicted")
         plt.xlabel("Date")
-        plt.ylabel("Safety Stock")
+        plt.ylabel(targets[0])
         plt.title("Predictions Over Time")
         plt.xticks(rotation=45)
         plt.tight_layout()
@@ -81,11 +85,12 @@ if __name__ == "__main__":
         "--model", default="models/gb_regressor.joblib", help="Trained model file"
     )
     parser.add_argument(
-        "--target",
-        default="Hinterlegter SiBe",
-        help="Target column",
+        "--targets",
+        default="SiBe_STD95,SiBe_AvgMax,SiBe_Percentile",
+        help="Comma separated target column names",
     )
     parser.add_argument("--plots", default="plots", help="Directory to store plots")
     args = parser.parse_args()
 
-    run_evaluation(args.data, args.model, args.target, args.plots)
+    target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
+    run_evaluation(args.data, args.model, target_list, args.plots)
