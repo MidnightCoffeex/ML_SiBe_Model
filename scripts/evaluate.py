@@ -13,9 +13,9 @@ def main() -> None:
     parser.add_argument("--data", help="Features parquet file")
     parser.add_argument("--model", help="Trained model file")
     parser.add_argument(
-        "--target",
-        default="Hinterlegter SiBe",
-        help="Target column",
+        "--targets",
+        default="SiBe_STD95,SiBe_AvgMax,SiBe_Percentile",
+        help="Comma separated target column names",
     )
     parser.add_argument("--plots", help="Directory to store plots")
     args = parser.parse_args()
@@ -27,7 +27,8 @@ def main() -> None:
     if not args.plots:
         args.plots = input("Ordner für Plots [plots]: ") or "plots"
 
-    evaluate_model.run_evaluation(args.data, args.model, args.target, args.plots)
+    target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
+    evaluate_model.run_evaluation(args.data, args.model, target_list, args.plots)
 
 
 if __name__ == "__main__":

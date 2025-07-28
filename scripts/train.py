@@ -16,9 +16,9 @@ def main() -> None:
     parser.add_argument("--model-dir", help="Base directory for models")
     parser.add_argument("--model-id", help="Run identifier")
     parser.add_argument(
-        "--target",
-        default="Hinterlegter SiBe",
-        help="Target column name",
+        "--targets",
+        default="SiBe_STD95,SiBe_AvgMax,SiBe_Percentile",
+        help="Comma separated target column names",
     )
     args = parser.parse_args()
 
@@ -44,7 +44,8 @@ def main() -> None:
     out_dir = Path(args.model_dir) / part_name / args.model_id
     out_dir.mkdir(parents=True, exist_ok=True)
     model_path = out_dir / 'model.joblib'
-    train_model.run_training_df(df, str(model_path), args.target)
+    target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
+    train_model.run_training_df(df, str(model_path), target_list)
 
 
 if __name__ == "__main__":

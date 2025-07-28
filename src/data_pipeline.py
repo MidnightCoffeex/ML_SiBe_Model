@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import pandas as pd
+import numpy as np
 
 
 DECIMAL_REGEX = re.compile(r"^-?\d{1,3}(\.\d{3})*,\d+$")
@@ -184,14 +185,22 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
 
         # planned movements from Dispo
         if 'Dispo' in data:
-            dispo = data['Dispo'][['Datum', 'Bedarfsmenge', 'Deckungsmenge']].copy()
-            dispo['net'] = dispo['Deckungsmenge'].fillna(0) - dispo['Bedarfsmenge'].fillna(0)
-            dispo = dispo.groupby('Datum', as_index=False)['net'].sum()
+            dispo_raw = data['Dispo'][['Datum', 'Bedarfsmenge', 'Deckungsmenge']].copy()
+            dispo_raw['Bedarfsmenge'] = pd.to_numeric(dispo_raw['Bedarfsmenge'], errors='coerce').fillna(0)
+            dispo_raw['Deckungsmenge'] = pd.to_numeric(dispo_raw['Deckungsmenge'], errors='coerce').fillna(0)
+            # keep daily demand for later feature engineering
+            demand_daily = dispo_raw.groupby('Datum', as_index=False)['Bedarfsmenge'].sum()
+            feat = pd.merge(feat, demand_daily, on='Datum', how='left')
+            feat['Bedarfsmenge'] = feat['Bedarfsmenge'].fillna(0)
+
+            dispo_raw['net'] = dispo_raw['Deckungsmenge'] - dispo_raw['Bedarfsmenge']
+            dispo = dispo_raw.groupby('Datum', as_index=False)['net'].sum()
             feat = pd.merge(feat, dispo, on='Datum', how='left')
             feat['net'] = feat['net'].fillna(0)
             feat['cum_dispo'] = feat['net'].cumsum()
         else:
             feat['cum_dispo'] = 0
+            feat['Bedarfsmenge'] = 0
 
         feat['EoD_Bestand'] = feat['Lagerbestand'] + feat['cum_dispo']
 
@@ -219,7 +228,32 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 wbz = float(pd.to_numeric(w.iloc[0], errors='coerce'))
         feat['WBZ_Days'] = wbz
 
-        feat = feat[['Teil', 'Datum', 'EoD_Bestand', 'Hinterlegter SiBe', 'EoD_Bestand_noSiBe', 'Flag_StockOut', 'WBZ_Days']]
+        # ----- pseudo label calculation -----
+        lead_time = int(wbz) if wbz and wbz > 0 else 1
+        demand_series = feat['Bedarfsmenge']
+        roll_mean = demand_series.rolling(lead_time, min_periods=1).mean()
+        roll_var = demand_series.rolling(lead_time, min_periods=1).var().fillna(0)
+        roll_max = demand_series.rolling(lead_time, min_periods=1).max()
+        lt_demand = demand_series.rolling(lead_time, min_periods=1).sum()
+        lt_p90 = lt_demand.expanding().quantile(0.9)
+
+        feat['SiBe_STD95'] = 1.65 * np.sqrt(lead_time * roll_var)
+        feat['SiBe_AvgMax'] = roll_max - roll_mean
+        feat['SiBe_Percentile'] = lt_p90 - roll_mean
+
+        # ----- rolling time features -----
+        for fac in [1.0, 2/3, 1/2, 1/4]:
+            w = max(1, int(round(lead_time * fac)))
+            key = str(int(fac*100)).rjust(2, '0')
+            feat[f'DemandMean_{key}'] = demand_series.shift(1).rolling(w, min_periods=1).mean()
+            feat[f'DemandMax_{key}'] = demand_series.shift(1).rolling(w, min_periods=1).max()
+
+        feat = feat[
+            ['Teil', 'Datum', 'EoD_Bestand', 'Hinterlegter SiBe', 'Bedarfsmenge',
+             'EoD_Bestand_noSiBe', 'Flag_StockOut', 'WBZ_Days',
+             'SiBe_STD95', 'SiBe_AvgMax', 'SiBe_Percentile'] +
+            [c for c in feat.columns if c.startswith('DemandMean_') or c.startswith('DemandMax_')]
+        ]
 
         processed[part] = feat
 
