@@ -88,8 +88,8 @@ python3.11 scripts/build_features.py
 ```
 
 Beim Aufruf werden die benötigten Pfade interaktiv abgefragt. Die Pipeline legt
-für jedes Teil einen Unterordner unter ``Features/`` an und speichert dort eine
-``features.parquet`` Datei.
+für jedes Teil einen Unterordner unter ``Features/`` an und speichert dort
+sowohl eine ``features.parquet`` als auch eine ``features.xlsx`` Datei.
 
 ## Training models
 

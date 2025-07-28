@@ -176,12 +176,17 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
 
 
 def save_feature_folders(features: Dict[str, pd.DataFrame], output_dir: str = 'Features') -> None:
-    """Write each part's features to ``output_dir/<part>/features.parquet``."""
+    """Write each part's features to ``output_dir/<part>``.
+
+    Both ``features.parquet`` and ``features.xlsx`` are created so the
+    tables can be used with tools that do not support Parquet.
+    """
     out_base = Path(output_dir)
     for part, df in features.items():
         part_dir = out_base / str(part)
         part_dir.mkdir(parents=True, exist_ok=True)
         df.to_parquet(part_dir / 'features.parquet', index=False)
+        df.to_excel(part_dir / 'features.xlsx', index=False)
 
 
 def run_pipeline(raw_dir: str, output_dir: str = 'Features') -> None:
