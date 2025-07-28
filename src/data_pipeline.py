@@ -76,7 +76,9 @@ def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[st
             dataset = rest
         dataset = dataset.split('.csv')[0]
         if dataset.startswith('Teile'):
-            dataset = dataset.replace('Teile', '')
+            cleaned = dataset.replace('Teile', '')
+            if cleaned in column_map:
+                dataset = cleaned
         if dataset not in column_map:
             continue  # ignore unrelated exports
         df = load_csv_file(csv, part)
@@ -127,12 +129,9 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             agg_tables[name] = _aggregate_dataset(df, ['BuchDat'])
         elif name == 'Dispo':
             agg_tables[name] = _aggregate_dataset(df, ['Termin', 'Solltermin'])
-        elif name == 'SiBe':
-            agg_tables[name] = _aggregate_dataset(df, ['Laufzeit'])
         elif name == 'SiBeVerlauf':
             agg_tables[name] = _aggregate_dataset(df, ['AudEreignis-ZeitPkt'])
         elif name in {'Bestand', 'Teilestamm'}:
-            # use export date as datum
             df = df.copy()
             df['Datum'] = df['ExportDatum']
             agg = {c: 'first' for c in df.columns if c not in {'Teil', 'Datum', 'Dataset', 'ExportDatum'}}
@@ -146,32 +145,84 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         parts.update(df['Teil'].astype(str).unique())
 
     for part in sorted(parts):
-        frames = []
+        data: Dict[str, pd.DataFrame] = {}
         for name, df in agg_tables.items():
             part_df = df[df['Teil'].astype(str) == str(part)].copy()
-            if part_df.empty:
-                continue
-            part_df = part_df.drop(columns=['Teil'])
-            part_df = part_df.add_prefix(f"{name}_")
-            part_df.rename(columns={f"{name}_Datum": 'Datum'}, inplace=True)
-            frames.append(part_df)
-        if not frames:
+            if not part_df.empty:
+                data[name] = part_df
+        if not data:
             continue
-        merged = frames[0]
-        for f in frames[1:]:
-            merged = pd.merge(merged, f, on='Datum', how='outer')
-        merged = merged.sort_values('Datum').reset_index(drop=True)
-        merged['Teil'] = part
-        # derived features
-        merged['EoD_Bestand'] = merged.get('Lagerbew_Lagerbestand').fillna(merged.get('Bestand_Bestand'))
-        merged['WBZ_Days'] = merged.get('Teilestamm_WBZ')
-        merged['SiBe'] = merged.get('SiBe_Sicherheitsbest')
-        merged['EoD_Bestand_noSiBe'] = merged['EoD_Bestand'] - merged['SiBe'].fillna(0)
-        merged['Flag_StockOut'] = (merged['EoD_Bestand_noSiBe'] <= 0).astype(int)
-        # normalize numeric columns
-        num_cols = merged.select_dtypes(include='number').columns
-        merged[num_cols] = merged[num_cols].fillna(0)
-        processed[part] = merged
+
+        # collect all relevant dates from Lagerbew and Dispo
+        date_sets = []
+        for name in ['Lagerbew', 'Dispo']:
+            if name in data:
+                date_sets.append(pd.to_datetime(data[name]['Datum']))
+        if not date_sets:
+            continue
+        all_dates = pd.concat(date_sets).dropna().sort_values().unique()
+        feat = pd.DataFrame({'Datum': all_dates})
+        feat['Teil'] = part
+
+        # baseline inventory
+        if 'Lagerbew' in data:
+            lb = data['Lagerbew'][['Datum', 'Lagerbestand']].copy()
+            lb['Datum'] = pd.to_datetime(lb['Datum'])
+            feat = pd.merge(feat, lb, on='Datum', how='left')
+        else:
+            feat['Lagerbestand'] = pd.NA
+
+        if 'Bestand' in data:
+            best = data['Bestand'][['Datum', 'Bestand']].copy()
+            best['Datum'] = pd.to_datetime(best['Datum'])
+            feat = pd.merge(feat, best, on='Datum', how='left')
+            feat['Lagerbestand'] = feat['Lagerbestand'].combine_first(feat['Bestand'])
+            feat.drop(columns=['Bestand'], inplace=True)
+
+        feat.sort_values('Datum', inplace=True)
+        feat['Lagerbestand'] = feat['Lagerbestand'].ffill().fillna(0)
+
+        # planned movements from Dispo
+        if 'Dispo' in data:
+            dispo = data['Dispo'][['Datum', 'Bedarfsmenge', 'Deckungsmenge']].copy()
+            dispo['net'] = dispo['Deckungsmenge'].fillna(0) - dispo['Bedarfsmenge'].fillna(0)
+            dispo = dispo.groupby('Datum', as_index=False)['net'].sum()
+            feat = pd.merge(feat, dispo, on='Datum', how='left')
+            feat['net'] = feat['net'].fillna(0)
+            feat['cum_dispo'] = feat['net'].cumsum()
+        else:
+            feat['cum_dispo'] = 0
+
+        feat['EoD_Bestand'] = feat['Lagerbestand'] + feat['cum_dispo']
+
+        feat['EoD_Bestand'] = pd.to_numeric(feat['EoD_Bestand'], errors='coerce').fillna(0)
+
+        # safety stock history
+        if 'SiBeVerlauf' in data:
+            sibe = data['SiBeVerlauf'][['Datum', 'Im Sytem hinterlgeter SiBe']].copy()
+            sibe['Datum'] = pd.to_datetime(sibe['Datum'])
+            sibe = sibe.sort_values('Datum')
+            sibe.rename(columns={'Im Sytem hinterlgeter SiBe': 'Hinterlegter SiBe'}, inplace=True)
+            feat = pd.merge_asof(feat.sort_values('Datum'), sibe, on='Datum', direction='backward')
+            feat['Hinterlegter SiBe'] = pd.to_numeric(feat['Hinterlegter SiBe'], errors='coerce').fillna(0)
+        else:
+            feat['Hinterlegter SiBe'] = 0
+
+        feat['EoD_Bestand_noSiBe'] = feat['EoD_Bestand'] - feat['Hinterlegter SiBe']
+        feat['Flag_StockOut'] = (feat['EoD_Bestand_noSiBe'] <= 0).astype(int)
+
+        # WBZ from Teilestamm
+        wbz = None
+        if 'Teilestamm' in data:
+            w = data['Teilestamm']['WBZ'].dropna()
+            if not w.empty:
+                wbz = float(pd.to_numeric(w.iloc[0], errors='coerce'))
+        feat['WBZ_Days'] = wbz
+
+        feat = feat[['Teil', 'Datum', 'EoD_Bestand', 'Hinterlegter SiBe', 'EoD_Bestand_noSiBe', 'Flag_StockOut', 'WBZ_Days']]
+
+        processed[part] = feat
+
     return processed
 
 

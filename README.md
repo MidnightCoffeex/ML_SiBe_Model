@@ -34,14 +34,20 @@ filenames, loads the tables and filters for warehouse location ``120`` via the
 ``Lagerort`` column.  Decimal numbers written with commas are converted to
 standard floating point values.
 
-Tables of the same date are merged on the column ``Teil``.  Column names are
-prefixed with the dataset name (e.g. ``Bestand_Bestand`` for the end-of-day
-inventory or ``Dispo_Deckungsmenge`` for planned receipts).  Important features
-include:
+From the movement history and planning tables a daily time series per part is
+generated. Planned receipts (``Deckungsmenge``) increase the inventory while
+planned demand (``Bedarfsmenge``) reduces it. The safety stock history
+(``SiBeVerlauf``) is joined using the last known value up to each date.
 
-- **Bestand_Bestand** – current stock at the end of the day
-- **Dispo_Bedarfsmenge / Dispo_Deckungsmenge** – planned demand and supply
-- **SiBe_Sicherheitsbest** – recorded safety stock (target for training)
+Each produced feature file contains exactly these columns in the given order:
+
+- ``Teil`` – part number
+- ``Datum`` – date of the record
+- ``EoD_Bestand`` – simulated end-of-day stock including planned movements
+- ``Hinterlegter SiBe`` – safety stock active on that day
+- ``EoD_Bestand_noSiBe`` – stock minus safety stock
+- ``Flag_StockOut`` – ``1`` if ``EoD_Bestand_noSiBe`` <= 0
+- ``WBZ_Days`` – lead time from the part master data
 
 The resulting table contains one row per part and date and forms the input for
 model training.
