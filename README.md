@@ -84,30 +84,24 @@ To generate the feature table from the raw CSV files use the wrapper in
 `scripts/`:
 
 ```bash
-python3.11 scripts/build_features.py --input Rohdaten --output data/features.parquet
+python3.11 scripts/build_features.py
 ```
 
-The command reads the raw CSV files and saves a merged feature file.  The output
-format depends on the filename: use ``.parquet`` (default) for a Parquet file,
-``.csv`` for CSV or ``.xlsx`` for an Excel workbook.  For example:
-
-```bash
-python3.11 scripts/build_features.py --input Rohdaten --output data/features.csv
-```
+Beim Aufruf werden die benötigten Pfade interaktiv abgefragt. Die Pipeline legt
+für jedes Teil einen Unterordner unter ``Features/`` an und speichert dort eine
+``features.parquet`` Datei.
 
 ## Training models
 
 After preprocessing, train the model via:
 
 ```bash
-python3.11 scripts/train.py --data data/features.parquet
+python3.11 scripts/train.py
 ```
 
-This trains the ML model using the processed dataset and writes the resulting
-model to `models/`.  ``src/train_model.py`` uses a
-``GradientBoostingRegressor`` from scikit‑learn.  The data is split into a
-training and validation set to report a mean absolute error (MAE) on the
-validation split.
+Beim Start werden Feature-Ordner, Teilnummer (oder ``ALL``) sowie eine
+fortlaufende Modellnummer abgefragt. Das trainierte Modell landet unter
+``Modelle/<Teil>/<Nummer>/`` zusammen mit möglichen Ausgaben.
 
 ## Evaluating the model
 
@@ -115,8 +109,10 @@ Once a model has been trained, run the evaluation script to compute metrics and
 create diagnostic plots:
 
 ```bash
-python3.11 scripts/evaluate.py --data data/features.parquet --model models/gb_regressor.joblib --plots plots
+python3.11 scripts/evaluate.py
 ```
+
+Auch hier werden die benötigten Pfade interaktiv abgefragt.
 
 The script reports the MAE on a test split and writes several plot files to the
 specified directory:

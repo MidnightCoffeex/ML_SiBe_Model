@@ -32,8 +32,8 @@ def train_model(X: pd.DataFrame, y: pd.Series) -> GradientBoostingRegressor:
     return model
 
 
-def run_training(features_path: str, model_path: str, target: str) -> None:
-    df = load_features(features_path)
+def run_training_df(df: pd.DataFrame, model_path: str, target: str) -> None:
+    """Train a model from an already loaded DataFrame."""
     X, y = prepare_data(df, target)
     if len(X) < 50:
         print(
@@ -49,6 +49,11 @@ def run_training(features_path: str, model_path: str, target: str) -> None:
     Path(model_path).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, model_path)
     print(f"Model saved to {model_path}")
+
+
+def run_training(features_path: str, model_path: str, target: str) -> None:
+    df = load_features(features_path)
+    run_training_df(df, model_path, target)
 
 
 if __name__ == "__main__":
