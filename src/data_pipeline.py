@@ -41,8 +41,13 @@ def _load_column_map(xlsx_path: str) -> Dict[str, List[str]]:
 
 
 def load_csv_file(path: Path, part: str | None = None) -> pd.DataFrame:
-    """Load a single CSV file and apply basic cleaning."""
-    df = pd.read_csv(path, encoding='ISO-8859-1', delimiter=';', dtype=str)
+    """Load a single CSV file and apply basic cleaning.
+
+    Some exports use a comma instead of a semicolon as delimiter. ``pandas`` can
+    automatically detect the separator when ``sep=None`` and ``engine='python'``
+    is used.  This ensures all files are parsed correctly.
+    """
+    df = pd.read_csv(path, encoding='ISO-8859-1', sep=None, engine='python', dtype=str)
     df.columns = df.columns.str.strip()
     if 'Teil' not in df.columns and 'Teil ' in df.columns:
         df.rename(columns={'Teil ': 'Teil'}, inplace=True)
@@ -101,9 +106,16 @@ def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[st
 ###############################
 
 def _parse_date(df: pd.DataFrame, columns: List[str]) -> pd.Series:
+    """Parse the first available column in ``columns`` as datetime.
+
+    Some source tables mix date-only and date-time strings. ``pandas`` will
+    sometimes fail to infer the correct format when such mixtures occur.
+    Using ``format='mixed'`` ensures each entry is parsed individually.
+    """
     for c in columns:
         if c in df.columns:
-            return pd.to_datetime(df[c], errors='coerce', dayfirst=True)
+            col = df[c].astype(str).str.strip()
+            return pd.to_datetime(col, errors='coerce', dayfirst=True, format='mixed')
     return pd.NaT
 
 
