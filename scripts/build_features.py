@@ -9,13 +9,17 @@ from src import data_pipeline
 
 def main() -> None:
     import argparse
-    parser = argparse.ArgumentParser(description="Generate feature table from raw CSVs")
-    parser.add_argument("--input", default="Rohdaten", help="Directory with raw CSV files")
-    parser.add_argument(
-        "--output", default="data/features.parquet", help="Output parquet file"
-    )
+    parser = argparse.ArgumentParser(description="Generate feature tables from raw CSVs")
+    parser.add_argument("--input", help="Directory with raw CSV files")
+    parser.add_argument("--output", help="Output directory for features")
     args = parser.parse_args()
-    data_pipeline.create_features(args.input, args.output)
+
+    if not args.input:
+        args.input = input("Pfad zu Rohdaten [Rohdaten]: ") or "Rohdaten"
+    if not args.output:
+        args.output = input("Ausgabeordner für Features [Features]: ") or "Features"
+
+    data_pipeline.run_pipeline(args.input, args.output)
 
 
 if __name__ == "__main__":

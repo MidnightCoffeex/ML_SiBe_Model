@@ -2,6 +2,7 @@
 """Wrapper script for model training."""
 from pathlib import Path
 import sys
+import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src import train_model
@@ -10,17 +11,36 @@ from src import train_model
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Train the safety stock model")
-    parser.add_argument(
-        "--data", default="data/features.parquet", help="Path to features parquet"
-    )
-    parser.add_argument(
-        "--output", default="models/gb_regressor.joblib", help="Output model file"
-    )
-    parser.add_argument(
-        "--target", default="SiBe_Sicherheitsbest", help="Target column name"
-    )
+    parser.add_argument("--data", help="Root directory with feature folders")
+    parser.add_argument("--part", help="Specific part number or 'ALL'")
+    parser.add_argument("--model-dir", help="Base directory for models")
+    parser.add_argument("--model-id", help="Run identifier")
+    parser.add_argument("--target", default="SiBe", help="Target column name")
     args = parser.parse_args()
-    train_model.run_training(args.data, args.output, args.target)
+
+    if not args.data:
+        args.data = input("Pfad zu Features [Features]: ") or "Features"
+    if not args.part:
+        args.part = input("Teil-Nummer oder ALL [ALL]: ") or "ALL"
+    if not args.model_dir:
+        args.model_dir = "Modelle"
+    if not args.model_id:
+        args.model_id = input("Laufende Nummer [1]: ") or "1"
+
+    if args.part.upper() == "ALL":
+        frames = []
+        for f in Path(args.data).glob('*/features.parquet'):
+            frames.append(pd.read_parquet(f))
+        df = pd.concat(frames, ignore_index=True)
+        part_name = "ALL"
+    else:
+        df = pd.read_parquet(Path(args.data) / args.part / 'features.parquet')
+        part_name = args.part
+
+    out_dir = Path(args.model_dir) / part_name / args.model_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    model_path = out_dir / 'model.joblib'
+    train_model.run_training_df(df, str(model_path), args.target)
 
 
 if __name__ == "__main__":
