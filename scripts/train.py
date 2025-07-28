@@ -15,7 +15,11 @@ def main() -> None:
     parser.add_argument("--part", help="Specific part number or 'ALL'")
     parser.add_argument("--model-dir", help="Base directory for models")
     parser.add_argument("--model-id", help="Run identifier")
-    parser.add_argument("--target", default="SiBe", help="Target column name")
+    parser.add_argument(
+        "--target",
+        default="Hinterlegter SiBe",
+        help="Target column name",
+    )
     args = parser.parse_args()
 
     if not args.data:

@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import mean_absolute_error
 from sklearn.model_selection import train_test_split
+import pandas as pd
 
 from .train_model import load_features, prepare_data
 
@@ -27,7 +28,14 @@ def run_evaluation(
     mae = mean_absolute_error(y_test, y_pred)
     print(f"Test MAE: {mae:.3f}")
 
+    results = pd.DataFrame({"Actual": y_test, "Predicted": y_pred})
+
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+    results.to_csv(Path(output_dir) / "predictions.csv", index=False)
+    try:
+        results.to_excel(Path(output_dir) / "predictions.xlsx", index=False)
+    except Exception:
+        pass
 
     # Actual vs predicted scatter plot
     plt.figure()
@@ -73,7 +81,9 @@ if __name__ == "__main__":
         "--model", default="models/gb_regressor.joblib", help="Trained model file"
     )
     parser.add_argument(
-        "--target", default="SiBe_Sicherheitsbest", help="Target column"
+        "--target",
+        default="Hinterlegter SiBe",
+        help="Target column",
     )
     parser.add_argument("--plots", default="plots", help="Directory to store plots")
     args = parser.parse_args()
