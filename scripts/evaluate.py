@@ -17,7 +17,7 @@ def main() -> None:
     parser.add_argument("--raw", help="Directory with raw CSV files")
     parser.add_argument(
         "--targets",
-        default="LABLE_SiBe_STD95,LABLE_SiBe_AvgMax,LABLE_SiBe_Percentile",
+        default="LABLE_StockOut_MinAdd",
         help="Comma separated target column names",
     )
     parser.add_argument("--plots", help="Directory to store evaluation results")

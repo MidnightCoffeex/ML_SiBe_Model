@@ -47,6 +47,8 @@ Each produced feature file contains exactly these columns in the given order:
 - ``Hinterlegter SiBe`` – safety stock active on that day
 - ``EoD_Bestand_noSiBe`` – stock minus safety stock
 - ``Flag_StockOut`` – ``1`` if ``EoD_Bestand_noSiBe`` <= 0
+- ``LABLE_StockOut_MinAdd`` – minimal replenishment to avoid stock-out within
+  lead time
 - ``WBZ_Days`` – lead time from the part master data
 - ``LABLE_SiBe_STD95`` – safety stock based on demand variance
 - ``LABLE_SiBe_AvgMax`` – safety stock as difference of max and average demand
