@@ -14,6 +14,7 @@ def main() -> None:
     parser.add_argument("--part", help="Teil-Nummer oder ALL")
     parser.add_argument("--model-dir", help="Directory containing trained models")
     parser.add_argument("--model-id", help="Numerical model identifier")
+    parser.add_argument("--raw", help="Directory with raw CSV files")
     parser.add_argument(
         "--targets",
         default="LABLE_SiBe_STD95,LABLE_SiBe_AvgMax,LABLE_SiBe_Percentile",
@@ -28,6 +29,8 @@ def main() -> None:
         args.part = input("Teil-Nummer oder ALL [ALL]: ") or "ALL"
     if not args.model_dir:
         args.model_dir = "Modelle"
+    if not args.raw:
+        args.raw = "Rohdaten"
 
     eval_part = args.part
     if args.part.upper() == "ALL":
@@ -46,7 +49,7 @@ def main() -> None:
         args.plots = input("Ordner für Ergebnisse [plots]: ") or "plots"
 
     target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
-    evaluate_model.run_evaluation(str(features_path), str(model_path), target_list, args.plots)
+    evaluate_model.run_evaluation(str(features_path), str(model_path), target_list, args.plots, args.raw)
 
 
 if __name__ == "__main__":
