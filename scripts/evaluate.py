@@ -14,7 +14,7 @@ def main() -> None:
     parser.add_argument("--model", help="Trained model file")
     parser.add_argument(
         "--targets",
-        default="SiBe_STD95,SiBe_AvgMax,SiBe_Percentile",
+        default="LABLE_SiBe_STD95,LABLE_SiBe_AvgMax,LABLE_SiBe_Percentile",
         help="Comma separated target column names",
     )
     parser.add_argument("--plots", help="Directory to store plots")

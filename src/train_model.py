@@ -82,7 +82,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--targets",
-        default="SiBe_STD95,SiBe_AvgMax,SiBe_Percentile",
+        default="LABLE_SiBe_STD95,LABLE_SiBe_AvgMax,LABLE_SiBe_Percentile",
         help="Comma separated target column names",
     )
     args = parser.parse_args()

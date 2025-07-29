@@ -48,6 +48,13 @@ Each produced feature file contains exactly these columns in the given order:
 - ``EoD_Bestand_noSiBe`` – stock minus safety stock
 - ``Flag_StockOut`` – ``1`` if ``EoD_Bestand_noSiBe`` <= 0
 - ``WBZ_Days`` – lead time from the part master data
+- ``LABLE_SiBe_STD95`` – safety stock based on demand variance
+- ``LABLE_SiBe_AvgMax`` – safety stock as difference of max and average demand
+- ``LABLE_SiBe_Percentile`` – 90th percentile demand minus average
+  demand
+  
+Additional columns ``DemandMean_*`` and ``DemandMax_*`` hold rolling
+consumption statistics derived from ``EoD_Bestand_noSiBe``.
 
 The resulting table contains one row per part and date and forms the input for
 model training.
