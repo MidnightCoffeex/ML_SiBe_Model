@@ -30,11 +30,19 @@ def run_evaluation(
     print("Test MAE:", mae)
     print("Test RMSE:", rmse)
 
-    results = pd.DataFrame(y.iloc[test_idx].copy())
+    results = df.loc[y.iloc[test_idx].index].copy()
     for i, col in enumerate(targets):
         results[f"pred_{col}"] = y_pred[:, i]
 
+    if "Hinterlegter SiBe" in results.columns:
+        mae_sibe = mean_absolute_error(results["Hinterlegter SiBe"], y_pred[:, 0])
+        rmse_sibe = np.sqrt(mean_squared_error(results["Hinterlegter SiBe"], y_pred[:, 0]))
+        print("MAE vs Hinterlegter SiBe:", mae_sibe)
+        print("RMSE vs Hinterlegter SiBe:", rmse_sibe)
+
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+    if "Datum" in results.columns:
+        results = results.sort_values("Datum")
     results.to_csv(Path(output_dir) / "predictions.csv", index=False)
     try:
         results.to_excel(Path(output_dir) / "predictions.xlsx", index=False)

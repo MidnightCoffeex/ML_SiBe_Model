@@ -10,25 +10,43 @@ from src import evaluate_model
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Evaluate trained model")
-    parser.add_argument("--data", help="Features parquet file")
-    parser.add_argument("--model", help="Trained model file")
+    parser.add_argument("--features", help="Root directory with feature folders")
+    parser.add_argument("--part", help="Teil-Nummer oder ALL")
+    parser.add_argument("--model-dir", help="Directory containing trained models")
+    parser.add_argument("--model-id", help="Numerical model identifier")
     parser.add_argument(
         "--targets",
         default="LABLE_SiBe_STD95,LABLE_SiBe_AvgMax,LABLE_SiBe_Percentile",
         help="Comma separated target column names",
     )
-    parser.add_argument("--plots", help="Directory to store plots")
+    parser.add_argument("--plots", help="Directory to store evaluation results")
     args = parser.parse_args()
 
-    if not args.data:
-        args.data = input("Pfad zu Feature-Datei: ")
-    if not args.model:
-        args.model = input("Pfad zum Modell: ")
+    if not args.features:
+        args.features = input("Pfad zu Features [Features]: ") or "Features"
+    if not args.part:
+        args.part = input("Teil-Nummer oder ALL [ALL]: ") or "ALL"
+    if not args.model_dir:
+        args.model_dir = "Modelle"
+
+    eval_part = args.part
+    if args.part.upper() == "ALL":
+        eval_part = input("Teilnummer für Auswertung: ")
+
+    if not args.model_id:
+        mdir = Path(args.model_dir) / args.part
+        existing = [p.name for p in mdir.glob('*') if p.is_dir() and p.name.isdigit()]
+        if existing:
+            print("Verfügbare Modelle:", ", ".join(sorted(existing)))
+        args.model_id = input("Modellnummer: ")
+
+    features_path = Path(args.features) / eval_part / 'features.parquet'
+    model_path = Path(args.model_dir) / args.part / args.model_id / 'model.joblib'
     if not args.plots:
-        args.plots = input("Ordner für Plots [plots]: ") or "plots"
+        args.plots = input("Ordner für Ergebnisse [plots]: ") or "plots"
 
     target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
-    evaluate_model.run_evaluation(args.data, args.model, target_list, args.plots)
+    evaluate_model.run_evaluation(str(features_path), str(model_path), target_list, args.plots)
 
 
 if __name__ == "__main__":
