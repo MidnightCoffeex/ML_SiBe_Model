@@ -239,8 +239,17 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 wbz = float(pd.to_numeric(w.iloc[0], errors='coerce'))
         feat['WBZ_Days'] = wbz
 
-        # ----- pseudo label calculation -----
         lead_time = int(wbz) if wbz and wbz > 0 else 1
+
+        # minimal replenishment to avoid stock-out within lead time
+        future_min = (
+            feat['EoD_Bestand_noSiBe'][::-1]
+            .rolling(lead_time, min_periods=1)
+            .min()[::-1]
+        )
+        feat['LABLE_StockOut_MinAdd'] = np.maximum(0, -future_min)
+
+        # ----- pseudo label calculation -----
         demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
         demand_series = demand_series.clip(lower=0).fillna(0)
         roll_mean = demand_series.rolling(lead_time, min_periods=1).mean()
@@ -261,10 +270,24 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             feat[f'DemandMax_{key}'] = demand_series.shift(1).rolling(w, min_periods=1).max()
 
         feat = feat[
-            ['Teil', 'Datum', 'EoD_Bestand', 'Hinterlegter SiBe',
-             'EoD_Bestand_noSiBe', 'Flag_StockOut', 'WBZ_Days',
-             'LABLE_SiBe_STD95', 'LABLE_SiBe_AvgMax', 'LABLE_SiBe_Percentile'] +
-            [c for c in feat.columns if c.startswith('DemandMean_') or c.startswith('DemandMax_')]
+            [
+                'Teil',
+                'Datum',
+                'EoD_Bestand',
+                'Hinterlegter SiBe',
+                'EoD_Bestand_noSiBe',
+                'Flag_StockOut',
+                'WBZ_Days',
+                'LABLE_StockOut_MinAdd',
+                'LABLE_SiBe_STD95',
+                'LABLE_SiBe_AvgMax',
+                'LABLE_SiBe_Percentile',
+            ]
+            + [
+                c
+                for c in feat.columns
+                if c.startswith('DemandMean_') or c.startswith('DemandMax_')
+            ]
         ]
 
         processed[part] = feat
