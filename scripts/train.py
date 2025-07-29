@@ -28,8 +28,15 @@ def main() -> None:
         args.part = input("Teil-Nummer oder ALL [ALL]: ") or "ALL"
     if not args.model_dir:
         args.model_dir = "Modelle"
+
+    part_name = args.part if args.part else "ALL"
+
     if not args.model_id:
-        args.model_id = input("Laufende Nummer [1]: ") or "1"
+        part_dir = Path(args.model_dir) / part_name
+        existing = [int(p.name) for p in part_dir.glob('*') if p.is_dir() and p.name.isdigit()]
+        next_id = max(existing, default=0) + 1
+        args.model_id = str(next_id)
+        print(f"Automatisch gewählte Nummer: {args.model_id}")
 
     if args.part.upper() == "ALL":
         frames = []
