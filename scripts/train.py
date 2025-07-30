@@ -20,6 +20,10 @@ def main() -> None:
         default="LABLE_StockOut_MinAdd",
         help="Comma separated target column names",
     )
+    parser.add_argument("--n_estimators", type=int)
+    parser.add_argument("--learning_rate", type=float)
+    parser.add_argument("--max_depth", type=int)
+    parser.add_argument("--subsample", type=float)
     args = parser.parse_args()
 
     if not args.data:
@@ -28,6 +32,19 @@ def main() -> None:
         args.part = input("Teil-Nummer oder ALL [ALL]: ") or "ALL"
     if not args.model_dir:
         args.model_dir = "Modelle"
+
+    if args.n_estimators is None:
+        entry = input("n_estimators [100]: ")
+        args.n_estimators = int(entry) if entry else 100
+    if args.learning_rate is None:
+        entry = input("learning_rate [0.1]: ")
+        args.learning_rate = float(entry) if entry else 0.1
+    if args.max_depth is None:
+        entry = input("max_depth [3]: ")
+        args.max_depth = int(entry) if entry else 3
+    if args.subsample is None:
+        entry = input("subsample [1.0]: ")
+        args.subsample = float(entry) if entry else 1.0
 
     part_name = args.part if args.part else "ALL"
 
@@ -52,7 +69,15 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     model_path = out_dir / 'model.joblib'
     target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
-    train_model.run_training_df(df, str(model_path), target_list)
+    train_model.run_training_df(
+        df,
+        str(model_path),
+        target_list,
+        n_estimators=args.n_estimators,
+        learning_rate=args.learning_rate,
+        max_depth=args.max_depth,
+        subsample=args.subsample,
+    )
 
 
 if __name__ == "__main__":

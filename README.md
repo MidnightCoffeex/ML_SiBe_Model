@@ -74,6 +74,7 @@ is available or process only a subset of files.
 - Matplotlib
 - pyarrow
 - openpyxl (for Excel output)
+- plotly (for interactive graphs)
 
 Install the dependencies with pip:
 
@@ -115,8 +116,12 @@ python3.11 scripts/train.py
 ```
 
 Beim Start werden Feature-Ordner, Teilnummer (oder ``ALL``) sowie eine
-fortlaufende Modellnummer abgefragt. Das trainierte Modell landet unter
-``Modelle/<Teil>/<Nummer>/`` zusammen mit möglichen Ausgaben.
+fortlaufende Modellnummer abgefragt. Anschließend können die wichtigsten
+Hyperparameter des ``GradientBoostingRegressor`` interaktiv gesetzt werden
+(``n_estimators``, ``learning_rate``, ``max_depth`` und ``subsample``). Wird bei
+der Eingabe einfach ``Enter`` gedrückt, gelten die Standardwerte. Das
+trainierte Modell landet unter ``Modelle/<Teil>/<Nummer>/`` zusammen mit
+zusätzlichen Ausgaben wie der berechneten Feature-Importance.
 
 ## Evaluating the model
 
@@ -129,13 +134,17 @@ python3.11 scripts/evaluate.py
 
 Auch hier werden die benötigten Pfade interaktiv abgefragt.
 
-The script reports the MAE on a test split and writes several plot files to the
-specified directory:
+The script reports MAE, RMSE, R² and MAPE on a test split and writes several
+plot files to the specified directory.  All graphs are also saved as HTML so
+they can be opened in any browser:
 
-- ``actual_vs_pred.png`` – scatter plot of predicted versus actual values
-- ``training_history.png`` – model deviance over boosting iterations
-- ``predictions_over_time.png`` – comparison of predictions and actual values
-  by date
+- ``actual_vs_pred.png`` / ``.html`` – scatter plot of predicted versus actual values
+- ``predictions_over_time.png`` / ``.html`` – comparison of predictions and actual values by date
+- ``training_history.png`` / ``.html`` – model deviance over boosting iterations
+
+Die ausgegebene Feature-Importance basiert auf einer Permutation Importance des
+Test-Splits. Hohe Werte bedeuten, dass die jeweilige Spalte einen großen
+Einfluss auf die Vorhersage hat.
 
 ## Known limitations
 
