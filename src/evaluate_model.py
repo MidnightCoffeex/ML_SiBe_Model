@@ -5,7 +5,13 @@ from typing import Tuple
 import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+import plotly.express as px
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    mean_absolute_percentage_error,
+)
 from sklearn.model_selection import TimeSeriesSplit
 import pandas as pd
 import numpy as np
@@ -50,8 +56,11 @@ def _evaluate_range(
 
     mae = mean_absolute_error(results["Hinterlegter SiBe"], results[pred_col])
     rmse = np.sqrt(mean_squared_error(results["Hinterlegter SiBe"], results[pred_col]))
-    print(f"{prefix} MAE vs Hinterlegter SiBe:", mae)
-    print(f"{prefix} RMSE vs Hinterlegter SiBe:", rmse)
+    r2 = r2_score(results["Hinterlegter SiBe"], results[pred_col])
+    mape = mean_absolute_percentage_error(results["Hinterlegter SiBe"], results[pred_col])
+    print(
+        f"{prefix} MAE vs Hinterlegter SiBe: {mae:.3f} | RMSE: {rmse:.3f} | R2: {r2:.3f} | MAPE: {mape:.3f}"
+    )
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     results.to_csv(Path(output_dir) / f"{prefix}_predictions.csv", index=False)
@@ -68,6 +77,15 @@ def _evaluate_range(
     plt.tight_layout()
     plt.savefig(Path(output_dir) / f"{prefix}_actual_vs_pred.png")
 
+    fig = px.scatter(
+        results,
+        x="Hinterlegter SiBe",
+        y=pred_col,
+        labels={"Hinterlegter SiBe": "Actual Hinterlegter SiBe", pred_col: f"Predicted {target}"},
+        title="Actual vs Predicted",
+    )
+    fig.write_html(Path(output_dir) / f"{prefix}_actual_vs_pred.html")
+
     plt.figure()
     sns.lineplot(x="Datum", y="Hinterlegter SiBe", data=results, label="Actual")
     sns.lineplot(x="Datum", y=pred_col, data=results, label="Predicted")
@@ -77,6 +95,15 @@ def _evaluate_range(
     plt.xticks(rotation=45)
     plt.tight_layout()
     plt.savefig(Path(output_dir) / f"{prefix}_predictions_over_time.png")
+
+    fig2 = px.line(
+        results,
+        x="Datum",
+        y=["Hinterlegter SiBe", pred_col],
+        labels={"value": target, "variable": "Serie"},
+        title="Predictions Over Time",
+    )
+    fig2.write_html(Path(output_dir) / f"{prefix}_predictions_over_time.html")
 
 
 def run_evaluation(
@@ -98,8 +125,9 @@ def run_evaluation(
     y_pred_test = model.predict(X.iloc[test_idx])
     mae = mean_absolute_error(y.iloc[test_idx], y_pred_test, multioutput="raw_values")
     rmse = np.sqrt(mean_squared_error(y.iloc[test_idx], y_pred_test, multioutput="raw_values"))
-    print("Test MAE:", mae)
-    print("Test RMSE:", rmse)
+    r2 = r2_score(y.iloc[test_idx], y_pred_test, multioutput="raw_values")
+    mape = mean_absolute_percentage_error(y.iloc[test_idx], y_pred_test)
+    print("Test Metrics -> MAE:", mae, "RMSE:", rmse, "R2:", r2, "MAPE:", mape)
 
     # predictions for the entire feature set
     X_full = df.drop(columns=targets + ["EoD_Bestand"], errors="ignore")
@@ -130,6 +158,14 @@ def run_evaluation(
         plt.title("Training History")
         plt.tight_layout()
         plt.savefig(Path(output_dir) / "training_history.png")
+
+        fig_hist = px.line(
+            x=list(range(1, len(model.train_score_) + 1)),
+            y=model.train_score_,
+            labels={"x": "Iteration", "y": "Deviance"},
+            title="Training History",
+        )
+        fig_hist.write_html(Path(output_dir) / "training_history.html")
 
 
 if __name__ == "__main__":
