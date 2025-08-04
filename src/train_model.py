@@ -42,6 +42,7 @@ def train_model(
     learning_rate: float = 0.1,
     max_depth: int = 3,
     subsample: float = 1.0,
+    sample_weight: np.ndarray | None = None,
 ) -> MultiOutputRegressor:
     """Train a multi-output Gradient Boosting regressor."""
     base = GradientBoostingRegressor(
@@ -52,7 +53,7 @@ def train_model(
         subsample=subsample,
     )
     model = MultiOutputRegressor(base)
-    model.fit(X, y)
+    model.fit(X, y, sample_weight=sample_weight)
     return model
 
 
@@ -65,15 +66,19 @@ def run_training_df(
     learning_rate: float = 0.1,
     max_depth: int = 3,
     subsample: float = 1.0,
+    cv_splits: int | None = None,
 ) -> tuple[list[float], list[float]]:
     """Train a model from an already loaded DataFrame."""
     X, y = prepare_data(df, targets)
+    weights = np.ones(len(y))
+    if 'LABLE_StockOut_MinAdd' in y.columns:
+        weights[y['LABLE_StockOut_MinAdd'] > 0] = 5.0
     if len(X) < 50:
         print(
             "Warning: very few training samples; results may be unreliable"
         )
 
-    tscv = TimeSeriesSplit(n_splits=3)
+    tscv = TimeSeriesSplit(n_splits=5)
     splits = list(tscv.split(X))
     train_idx, val_idx = splits[-2]
     train_full_idx, test_idx = splits[-1]
@@ -85,6 +90,7 @@ def run_training_df(
         learning_rate=learning_rate,
         max_depth=max_depth,
         subsample=subsample,
+        sample_weight=weights[train_idx],
     )
     val_pred = model.predict(X.iloc[val_idx])
     val_mae = mean_absolute_error(y.iloc[val_idx], val_pred, multioutput="raw_values")
@@ -102,6 +108,7 @@ def run_training_df(
         learning_rate=learning_rate,
         max_depth=max_depth,
         subsample=subsample,
+        sample_weight=weights[train_full_idx],
     )
     Path(model_path).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, model_path)
@@ -156,6 +163,42 @@ def run_training_df(
     except Exception as exc:
         print("Permutation Importance konnte nicht berechnet werden:", exc)
 
+    if cv_splits and cv_splits > 1:
+        cv = TimeSeriesSplit(n_splits=cv_splits)
+        fold_mae: list[float] = []
+        fold_rmse: list[float] = []
+        fold_r2: list[float] = []
+        fold_mape: list[float] = []
+        for i, (tr, val) in enumerate(cv.split(X), 1):
+            m = train_model(
+                X.iloc[tr],
+                y.iloc[tr],
+                n_estimators=n_estimators,
+                learning_rate=learning_rate,
+                max_depth=max_depth,
+                subsample=subsample,
+                sample_weight=weights[tr],
+            )
+            pred = m.predict(X.iloc[val])
+            fold_mae.append(mean_absolute_error(y.iloc[val], pred))
+            fold_rmse.append(np.sqrt(mean_squared_error(y.iloc[val], pred)))
+            fold_r2.append(r2_score(y.iloc[val], pred))
+            fold_mape.append(mean_absolute_percentage_error(y.iloc[val], pred))
+            print(
+                f"Fold {i}: MAE {fold_mae[-1]:.3f} RMSE {fold_rmse[-1]:.3f} R2 {fold_r2[-1]:.3f} MAPE {fold_mape[-1]:.3f}"
+            )
+        print(
+            "CV Mean:",
+            "MAE",
+            np.mean(fold_mae),
+            "RMSE",
+            np.mean(fold_rmse),
+            "R2",
+            np.mean(fold_r2),
+            "MAPE",
+            np.mean(fold_mape),
+        )
+
     return test_mae.tolist(), test_rmse.tolist()
 
 
@@ -168,6 +211,7 @@ def run_training(
     learning_rate: float = 0.1,
     max_depth: int = 3,
     subsample: float = 1.0,
+    cv_splits: int | None = None,
 ) -> tuple[list[float], list[float]]:
     df = load_features(features_path)
     return run_training_df(
@@ -178,6 +222,7 @@ def run_training(
         learning_rate=learning_rate,
         max_depth=max_depth,
         subsample=subsample,
+        cv_splits=cv_splits,
     )
 
 
@@ -198,6 +243,7 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", type=float, default=0.1)
     parser.add_argument("--max_depth", type=int, default=3)
     parser.add_argument("--subsample", type=float, default=1.0)
+    parser.add_argument("--cv_splits", type=int, default=None)
     args = parser.parse_args()
     target_list = [t.strip() for t in args.targets.split(",") if t.strip()]
     run_training(
@@ -208,4 +254,5 @@ if __name__ == "__main__":
         learning_rate=args.learning_rate,
         max_depth=args.max_depth,
         subsample=args.subsample,
+        cv_splits=args.cv_splits,
     )

@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument("--learning_rate", type=float)
     parser.add_argument("--max_depth", type=int)
     parser.add_argument("--subsample", type=float)
+    parser.add_argument("--cv", type=int, help="Number of cross-validation folds")
     args = parser.parse_args()
 
     if not args.data:
@@ -45,6 +46,9 @@ def main() -> None:
     if args.subsample is None:
         entry = input("subsample [1.0]: ")
         args.subsample = float(entry) if entry else 1.0
+    if args.cv is None:
+        entry = input("cv_splits [0]: ")
+        args.cv = int(entry) if entry else 0
 
     part_name = args.part if args.part else "ALL"
 
@@ -77,6 +81,7 @@ def main() -> None:
         learning_rate=args.learning_rate,
         max_depth=args.max_depth,
         subsample=args.subsample,
+        cv_splits=args.cv if args.cv and args.cv > 1 else None,
     )
 
 
