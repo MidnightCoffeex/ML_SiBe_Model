@@ -116,7 +116,7 @@ def run_evaluation(
     """Evaluate the trained model and generate plots for multiple time frames."""
     df = load_features(features_path)
     X, y = prepare_data(df, targets)
-    tscv = TimeSeriesSplit(n_splits=3)
+    tscv = TimeSeriesSplit(n_splits=5)
     splits = list(tscv.split(X))
     train_idx, val_idx = splits[-2]
     train_full_idx, test_idx = splits[-1]

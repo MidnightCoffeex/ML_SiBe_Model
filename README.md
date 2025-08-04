@@ -47,6 +47,8 @@ Each produced feature file contains exactly these columns in the given order:
 - ``Hinterlegter SiBe`` – safety stock active on that day
 - ``EoD_Bestand_noSiBe`` – stock minus safety stock
 - ``Flag_StockOut`` – ``1`` if ``EoD_Bestand_noSiBe`` <= 0
+- ``DaysToEmpty`` – days until stock would be depleted (0 on stock-out, large value when no stock-out is foreseen)
+- ``BestandDelta_7T`` – change in ``EoD_Bestand`` compared to seven days prior
 - ``LABLE_StockOut_MinAdd`` – minimal replenishment to avoid stock-out within
   lead time
 - ``WBZ_Days`` – lead time from the part master data
@@ -122,6 +124,11 @@ Hyperparameter des ``GradientBoostingRegressor`` interaktiv gesetzt werden
 der Eingabe einfach ``Enter`` gedrückt, gelten die Standardwerte. Das
 trainierte Modell landet unter ``Modelle/<Teil>/<Nummer>/`` zusammen mit
 zusätzlichen Ausgaben wie der berechneten Feature-Importance.
+
+During training each sample receives a weight so that days with imminent
+stock-outs (``LABLE_StockOut_MinAdd`` > 0) influence the model more strongly.
+An optional time-series cross-validation can be enabled via ``--cv`` to obtain
+more robust performance estimates.
 
 ## Evaluating the model
 

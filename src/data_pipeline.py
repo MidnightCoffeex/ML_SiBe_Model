@@ -231,6 +231,32 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         feat['EoD_Bestand_noSiBe'] = feat['EoD_Bestand'] - feat['Hinterlegter SiBe']
         feat['Flag_StockOut'] = (feat['EoD_Bestand_noSiBe'] <= 0).astype(int)
 
+        # Days until stock depletes when no additional supply arrives
+        # Iterate backwards while keeping track of the next stock-out date
+        next_so = pd.NaT
+        horizon = (feat['Datum'].max() - feat['Datum'].min()).days + 1
+        days_to_empty = np.empty(len(feat), dtype=float)
+        for i in range(len(feat) - 1, -1, -1):
+            current_date = feat.loc[i, 'Datum']
+            if feat.loc[i, 'Flag_StockOut'] == 1:
+                next_so = current_date
+                days_to_empty[i] = 0
+            else:
+                if pd.isna(next_so):
+                    days_to_empty[i] = horizon
+                else:
+                    days_to_empty[i] = (next_so - current_date).days
+        feat['DaysToEmpty'] = days_to_empty
+
+        # Inventory change over the last 7 days
+        prev = feat[['Datum', 'EoD_Bestand']].copy()
+        prev['Datum'] = prev['Datum'] + pd.Timedelta(days=7)
+        prev.rename(columns={'EoD_Bestand': 'EoD_Bestand_prev7'}, inplace=True)
+        feat = pd.merge(feat, prev, on='Datum', how='left')
+        feat['BestandDelta_7T'] = feat['EoD_Bestand'] - feat['EoD_Bestand_prev7']
+        feat['BestandDelta_7T'] = feat['BestandDelta_7T'].fillna(0)
+        feat.drop(columns=['EoD_Bestand_prev7'], inplace=True)
+
         # WBZ from Teilestamm
         wbz = None
         if 'Teilestamm' in data:
@@ -277,6 +303,8 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 'Hinterlegter SiBe',
                 'EoD_Bestand_noSiBe',
                 'Flag_StockOut',
+                'DaysToEmpty',
+                'BestandDelta_7T',
                 'WBZ_Days',
                 'LABLE_StockOut_MinAdd',
                 'LABLE_SiBe_STD95',
