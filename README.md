@@ -94,7 +94,12 @@ cd AGENTS_MAKE_ML
 python3.11 -m pip install -r requirements.txt
 ```
 
-All scripts assume Python 3.11 or later.
+All scripts assume Python 3.11 or later. For XGBoost and LightGBM support
+additional packages are required:
+
+```bash
+python3.11 -m pip install xgboost lightgbm
+```
 
 ## Running the pipeline
 
@@ -111,24 +116,28 @@ sowohl eine ``features.parquet`` als auch eine ``features.xlsx`` Datei.
 
 ## Training models
 
-After preprocessing, train the model via:
+After preprocessing, train one or more models via:
 
 ```bash
-python3.11 scripts/train.py
+python3.11 scripts/train.py --models gb,xgb,lgbm
 ```
 
-Beim Start werden Feature-Ordner, Teilnummer (oder ``ALL``) sowie eine
-fortlaufende Modellnummer abgefragt. Anschließend können die wichtigsten
-Hyperparameter des ``GradientBoostingRegressor`` interaktiv gesetzt werden
-(``n_estimators``, ``learning_rate``, ``max_depth`` und ``subsample``). Wird bei
-der Eingabe einfach ``Enter`` gedrückt, gelten die Standardwerte. Das
-trainierte Modell landet unter ``Modelle/<Teil>/<Nummer>/`` zusammen mit
-zusätzlichen Ausgaben wie der berechneten Feature-Importance.
+The script supports the scikit-learn Gradient Boosting regressor (``gb``) as
+well as XGBoost (``xgb``) and LightGBM (``lgbm``). Multiple types can be
+specified as a comma separated list and will be trained sequentially using the
+same train/validation/test split. If no model type is given, ``gb`` is used for
+backwards compatibility.
 
-During training each sample receives a weight so that days with imminent
-stock-outs (``LABLE_StockOut_MinAdd`` > 0) influence the model more strongly.
-An optional time-series cross-validation can be enabled via ``--cv`` to obtain
-more robust performance estimates.
+During the interactive prompts the feature directory, part number (or ``ALL``)
+and a model identifier are requested. Hyperparameters such as
+``n_estimators``, ``learning_rate``, ``max_depth`` and ``subsample`` can be
+entered manually or left at their defaults. Results are stored under
+``Modelle/<Teil>/<Modelltyp>/<Modellnummer>/`` containing the trained model,
+metrics and feature importances.
+
+Training assigns a higher weight to rows with imminent stock-outs
+(``LABLE_StockOut_MinAdd`` > 0). An optional time-series cross-validation can
+be enabled via ``--cv`` to obtain more robust performance estimates.
 
 ## Evaluating the model
 
@@ -136,14 +145,13 @@ Once a model has been trained, run the evaluation script to compute metrics and
 create diagnostic plots:
 
 ```bash
-python3.11 scripts/evaluate.py
+python3.11 scripts/evaluate.py --model-type gb --model-id 1
 ```
 
-Auch hier werden die benötigten Pfade interaktiv abgefragt.
-
-The script reports MAE, RMSE, R² and MAPE on a test split and writes several
-plot files to the specified directory.  All graphs are also saved as HTML so
-they can be opened in any browser:
+The evaluator infers the model type from the directory layout if not provided.
+Plots and CSV exports are written to ``plots/<Teil>/<Modelltyp>/<Modellnummer>/``.
+It reports MAE, RMSE, R² and MAPE on the test split and saves several graphs
+both as PNG and HTML files:
 
 - ``actual_vs_pred.png`` / ``.html`` – scatter plot of predicted versus actual values
 - ``predictions_over_time.png`` / ``.html`` – comparison of predictions and actual values by date

@@ -3,6 +3,7 @@
 from pathlib import Path
 import sys
 import pandas as pd
+from sklearn.model_selection import TimeSeriesSplit
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src import train_model
@@ -15,6 +16,11 @@ def main() -> None:
     parser.add_argument("--part", help="Specific part number or 'ALL'")
     parser.add_argument("--model-dir", help="Base directory for models")
     parser.add_argument("--model-id", help="Run identifier")
+    parser.add_argument(
+        "--models",
+        default="gb",
+        help="Comma separated model types (gb,xgb,lgbm)",
+    )
     parser.add_argument(
         "--targets",
         default="LABLE_StockOut_MinAdd",
@@ -52,8 +58,10 @@ def main() -> None:
 
     part_name = args.part if args.part else "ALL"
 
+    model_types = [m.strip() for m in args.models.split(',') if m.strip()]
+
     if not args.model_id:
-        part_dir = Path(args.model_dir) / part_name
+        part_dir = Path(args.model_dir) / part_name / model_types[0]
         existing = [int(p.name) for p in part_dir.glob('*') if p.is_dir() and p.name.isdigit()]
         next_id = max(existing, default=0) + 1
         args.model_id = str(next_id)
@@ -69,20 +77,28 @@ def main() -> None:
         df = pd.read_parquet(Path(args.data) / args.part / 'features.parquet')
         part_name = args.part
 
-    out_dir = Path(args.model_dir) / part_name / args.model_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-    model_path = out_dir / 'model.joblib'
     target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
-    train_model.run_training_df(
-        df,
-        str(model_path),
-        target_list,
-        n_estimators=args.n_estimators,
-        learning_rate=args.learning_rate,
-        max_depth=args.max_depth,
-        subsample=args.subsample,
-        cv_splits=args.cv if args.cv and args.cv > 1 else None,
-    )
+    X, _ = train_model.prepare_data(df, target_list)
+    tscv = TimeSeriesSplit(n_splits=5)
+    splits = list(tscv.split(X))
+    split_indices = (splits[-2][0], splits[-2][1], splits[-1][0], splits[-1][1])
+
+    for mtype in model_types:
+        out_dir = Path(args.model_dir) / part_name / mtype / args.model_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        model_path = out_dir / 'model.joblib'
+        train_model.run_training_df(
+            df,
+            str(model_path),
+            target_list,
+            n_estimators=args.n_estimators,
+            learning_rate=args.learning_rate,
+            max_depth=args.max_depth,
+            subsample=args.subsample,
+            cv_splits=args.cv if args.cv and args.cv > 1 else None,
+            model_type=mtype,
+            split_indices=split_indices,
+        )
 
 
 if __name__ == "__main__":

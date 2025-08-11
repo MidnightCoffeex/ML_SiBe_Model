@@ -13,6 +13,7 @@ def main() -> None:
     parser.add_argument("--features", help="Root directory with feature folders")
     parser.add_argument("--part", help="Teil-Nummer oder ALL")
     parser.add_argument("--model-dir", help="Directory containing trained models")
+    parser.add_argument("--model-type", help="Model type (gb,xgb,lgbm)")
     parser.add_argument("--model-id", help="Numerical model identifier")
     parser.add_argument("--raw", help="Directory with raw CSV files")
     parser.add_argument(
@@ -36,20 +37,28 @@ def main() -> None:
     if args.part.upper() == "ALL":
         eval_part = input("Teilnummer für Auswertung: ")
 
-    if not args.model_id:
+    if not args.model_type:
         mdir = Path(args.model_dir) / args.part
+        types = [p.name for p in mdir.glob('*') if p.is_dir()]
+        if types:
+            print("Verfügbare Modelltypen:", ", ".join(sorted(types)))
+        args.model_type = input("Modelltyp: ")
+
+    if not args.model_id:
+        mdir = Path(args.model_dir) / args.part / args.model_type
         existing = [p.name for p in mdir.glob('*') if p.is_dir() and p.name.isdigit()]
         if existing:
             print("Verfügbare Modelle:", ", ".join(sorted(existing)))
         args.model_id = input("Modellnummer: ")
 
     features_path = Path(args.features) / eval_part / 'features.parquet'
-    model_path = Path(args.model_dir) / args.part / args.model_id / 'model.joblib'
+    model_path = Path(args.model_dir) / args.part / args.model_type / args.model_id / 'model.joblib'
     if not args.plots:
         args.plots = input("Ordner für Ergebnisse [plots]: ") or "plots"
+    plot_dir = Path(args.plots) / args.part / args.model_type / args.model_id
 
     target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
-    evaluate_model.run_evaluation(str(features_path), str(model_path), target_list, args.plots, args.raw)
+    evaluate_model.run_evaluation(str(features_path), str(model_path), target_list, str(plot_dir), args.raw, model_type=args.model_type)
 
 
 if __name__ == "__main__":

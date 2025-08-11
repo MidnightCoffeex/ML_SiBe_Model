@@ -34,7 +34,7 @@ def prepare_data(df: pd.DataFrame, targets: list[str]) -> tuple[pd.DataFrame, pd
     return X, y
 
 
-def train_model(
+def train_gradient_boosting_model(
     X: pd.DataFrame,
     y: pd.DataFrame,
     *,
@@ -57,6 +57,66 @@ def train_model(
     return model
 
 
+def train_xgboost_model(
+    X: pd.DataFrame,
+    y: pd.DataFrame,
+    *,
+    n_estimators: int = 100,
+    learning_rate: float = 0.1,
+    max_depth: int = 3,
+    subsample: float = 1.0,
+    sample_weight: np.ndarray | None = None,
+) -> MultiOutputRegressor:
+    """Train a multi-output XGBoost regressor."""
+    from xgboost import XGBRegressor
+
+    base = XGBRegressor(
+        n_estimators=n_estimators,
+        learning_rate=learning_rate,
+        max_depth=max_depth,
+        subsample=subsample,
+        objective="reg:squarederror",
+        random_state=0,
+    )
+    model = MultiOutputRegressor(base)
+    model.fit(X, y, sample_weight=sample_weight)
+    return model
+
+
+def train_lightgbm_model(
+    X: pd.DataFrame,
+    y: pd.DataFrame,
+    *,
+    n_estimators: int = 100,
+    learning_rate: float = 0.1,
+    max_depth: int = -1,
+    subsample: float = 1.0,
+    sample_weight: np.ndarray | None = None,
+) -> MultiOutputRegressor:
+    """Train a multi-output LightGBM regressor."""
+    from lightgbm import LGBMRegressor
+
+    base = LGBMRegressor(
+        n_estimators=n_estimators,
+        learning_rate=learning_rate,
+        max_depth=max_depth,
+        subsample=subsample,
+        random_state=0,
+    )
+    model = MultiOutputRegressor(base)
+    model.fit(X, y, sample_weight=sample_weight)
+    return model
+
+
+# Backwards compatibility
+def train_model(
+    X: pd.DataFrame,
+    y: pd.DataFrame,
+    **kwargs,
+) -> MultiOutputRegressor:
+    return train_gradient_boosting_model(X, y, **kwargs)
+
+
 def run_training_df(
     df: pd.DataFrame,
     model_path: str,
@@ -67,23 +127,35 @@ def run_training_df(
     max_depth: int = 3,
     subsample: float = 1.0,
     cv_splits: int | None = None,
+    model_type: str = "gb",
+    split_indices: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None,
 ) -> tuple[list[float], list[float]]:
     """Train a model from an already loaded DataFrame."""
     X, y = prepare_data(df, targets)
     weights = np.ones(len(y))
-    if 'LABLE_StockOut_MinAdd' in y.columns:
-        weights[y['LABLE_StockOut_MinAdd'] > 0] = 5.0
+    if "LABLE_StockOut_MinAdd" in y.columns:
+        weights[y["LABLE_StockOut_MinAdd"] > 0] = 5.0
     if len(X) < 50:
-        print(
-            "Warning: very few training samples; results may be unreliable"
-        )
+        print("Warning: very few training samples; results may be unreliable")
 
-    tscv = TimeSeriesSplit(n_splits=5)
-    splits = list(tscv.split(X))
-    train_idx, val_idx = splits[-2]
-    train_full_idx, test_idx = splits[-1]
+    if split_indices is None:
+        tscv = TimeSeriesSplit(n_splits=5)
+        splits = list(tscv.split(X))
+        train_idx, val_idx = splits[-2]
+        train_full_idx, test_idx = splits[-1]
+    else:
+        train_idx, val_idx, train_full_idx, test_idx = split_indices
 
-    model = train_model(
+    if model_type == "gb":
+        trainer = train_gradient_boosting_model
+    elif model_type == "xgb":
+        trainer = train_xgboost_model
+    elif model_type == "lgbm":
+        trainer = train_lightgbm_model
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
+    model = trainer(
         X.iloc[train_idx],
         y.iloc[train_idx],
         n_estimators=n_estimators,
@@ -94,14 +166,12 @@ def run_training_df(
     )
     val_pred = model.predict(X.iloc[val_idx])
     val_mae = mean_absolute_error(y.iloc[val_idx], val_pred, multioutput="raw_values")
-    val_rmse = np.sqrt(
-        mean_squared_error(y.iloc[val_idx], val_pred, multioutput="raw_values")
-    )
+    val_rmse = np.sqrt(mean_squared_error(y.iloc[val_idx], val_pred, multioutput="raw_values"))
     val_r2 = r2_score(y.iloc[val_idx], val_pred, multioutput="raw_values")
     val_mape = mean_absolute_percentage_error(y.iloc[val_idx], val_pred)
 
     # refit on all data except test
-    model = train_model(
+    model = trainer(
         X.iloc[train_full_idx],
         y.iloc[train_full_idx],
         n_estimators=n_estimators,
@@ -115,32 +185,22 @@ def run_training_df(
     print(f"Model saved to {model_path}")
     test_pred = model.predict(X.iloc[test_idx])
     test_mae = mean_absolute_error(y.iloc[test_idx], test_pred, multioutput="raw_values")
-    test_rmse = np.sqrt(
-        mean_squared_error(y.iloc[test_idx], test_pred, multioutput="raw_values")
-    )
+    test_rmse = np.sqrt(mean_squared_error(y.iloc[test_idx], test_pred, multioutput="raw_values"))
     test_r2 = r2_score(y.iloc[test_idx], test_pred, multioutput="raw_values")
     test_mape = mean_absolute_percentage_error(y.iloc[test_idx], test_pred)
     print(
         "Validation:",
-        "MAE",
-        val_mae,
-        "RMSE",
-        val_rmse,
-        "R2",
-        val_r2,
-        "MAPE",
-        val_mape,
+        "MAE", val_mae,
+        "RMSE", val_rmse,
+        "R2", val_r2,
+        "MAPE", val_mape,
     )
     print(
         "Test:",
-        "MAE",
-        test_mae,
-        "RMSE",
-        test_rmse,
-        "R2",
-        test_r2,
-        "MAPE",
-        test_mape,
+        "MAE", test_mae,
+        "RMSE", test_rmse,
+        "R2", test_r2,
+        "MAPE", test_mape,
     )
 
     try:
@@ -157,11 +217,28 @@ def run_training_df(
             importances.append(r.importances_mean)
         mean_imp = np.mean(importances, axis=0)
         order = np.argsort(mean_imp)[::-1]
+        fi_df = pd.DataFrame({"feature": X.columns[order], "importance": mean_imp[order]})
         print("Permutation Importance:")
-        for idx in order:
-            print(f"  {X.columns[idx]}: {mean_imp[idx]:.4f}")
+        for _, row in fi_df.iterrows():
+            print(f"  {row['feature']}: {row['importance']:.4f}")
+        fi_df.to_csv(Path(model_path).with_name("feature_importances.csv"), index=False)
     except Exception as exc:
         print("Permutation Importance konnte nicht berechnet werden:", exc)
+
+    metrics_df = pd.DataFrame(
+        {
+            "target": targets,
+            "val_mae": val_mae,
+            "val_rmse": val_rmse,
+            "val_r2": val_r2,
+            "val_mape": val_mape,
+            "test_mae": test_mae,
+            "test_rmse": test_rmse,
+            "test_r2": test_r2,
+            "test_mape": test_mape,
+        }
+    )
+    metrics_df.to_csv(Path(model_path).with_name("metrics.csv"), index=False)
 
     if cv_splits and cv_splits > 1:
         cv = TimeSeriesSplit(n_splits=cv_splits)
@@ -170,7 +247,7 @@ def run_training_df(
         fold_r2: list[float] = []
         fold_mape: list[float] = []
         for i, (tr, val) in enumerate(cv.split(X), 1):
-            m = train_model(
+            m = trainer(
                 X.iloc[tr],
                 y.iloc[tr],
                 n_estimators=n_estimators,
@@ -189,41 +266,47 @@ def run_training_df(
             )
         print(
             "CV Mean:",
-            "MAE",
-            np.mean(fold_mae),
-            "RMSE",
-            np.mean(fold_rmse),
-            "R2",
-            np.mean(fold_r2),
-            "MAPE",
-            np.mean(fold_mape),
+            "MAE", np.mean(fold_mae),
+            "RMSE", np.mean(fold_rmse),
+            "R2", np.mean(fold_r2),
+            "MAPE", np.mean(fold_mape),
         )
 
     return test_mae.tolist(), test_rmse.tolist()
 
-
 def run_training(
     features_path: str,
-    model_path: str,
+    model_dir: str,
     targets: list[str],
+    model_types: list[str],
     *,
+    model_id: str = "1",
     n_estimators: int = 100,
     learning_rate: float = 0.1,
     max_depth: int = 3,
     subsample: float = 1.0,
     cv_splits: int | None = None,
-) -> tuple[list[float], list[float]]:
+) -> None:
     df = load_features(features_path)
-    return run_training_df(
-        df,
-        model_path,
-        targets,
-        n_estimators=n_estimators,
-        learning_rate=learning_rate,
-        max_depth=max_depth,
-        subsample=subsample,
-        cv_splits=cv_splits,
-    )
+    X, _ = prepare_data(df, targets)
+    tscv = TimeSeriesSplit(n_splits=5)
+    splits = list(tscv.split(X))
+    split_indices = (*splits[-2], *splits[-1])  # train, val, train_full, test
+
+    for mtype in model_types:
+        model_path = Path(model_dir) / mtype / model_id / "model.joblib"
+        run_training_df(
+            df,
+            str(model_path),
+            targets,
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            max_depth=max_depth,
+            subsample=subsample,
+            cv_splits=cv_splits,
+            model_type=mtype,
+            split_indices=split_indices,
+        )
 
 
 if __name__ == "__main__":
@@ -232,7 +315,11 @@ if __name__ == "__main__":
         "--data", default="data/features.parquet", help="Path to features parquet"
     )
     parser.add_argument(
-        "--output", default="models/gb_regressor.joblib", help="Output model file"
+        "--model-dir", default="models", help="Directory to store models"
+    )
+    parser.add_argument("--model-id", default="1", help="Model identifier")
+    parser.add_argument(
+        "--models", default="gb", help="Comma separated model types (gb,xgb,lgbm)"
     )
     parser.add_argument(
         "--targets",
@@ -246,10 +333,13 @@ if __name__ == "__main__":
     parser.add_argument("--cv_splits", type=int, default=None)
     args = parser.parse_args()
     target_list = [t.strip() for t in args.targets.split(",") if t.strip()]
+    model_types = [m.strip() for m in args.models.split(",") if m.strip()]
     run_training(
         args.data,
-        args.output,
+        args.model_dir,
         target_list,
+        model_types,
+        model_id=args.model_id,
         n_estimators=args.n_estimators,
         learning_rate=args.learning_rate,
         max_depth=args.max_depth,
