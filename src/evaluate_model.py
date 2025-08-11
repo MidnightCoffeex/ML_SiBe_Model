@@ -112,8 +112,16 @@ def run_evaluation(
     targets: list[str],
     output_dir: str,
     raw_dir: str = "Rohdaten",
+    model_type: str | None = None,
 ) -> None:
     """Evaluate the trained model and generate plots for multiple time frames."""
+    if model_type is None:
+        parts = set(Path(model_path).parts)
+        for cand in ["gb", "xgb", "lgbm"]:
+            if cand in parts:
+                model_type = cand
+                break
+
     df = load_features(features_path)
     X, y = prepare_data(df, targets)
     tscv = TimeSeriesSplit(n_splits=5)
@@ -176,6 +184,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model", default="models/gb_regressor.joblib", help="Trained model file"
     )
+    parser.add_argument("--model-type", help="Model type (gb,xgb,lgbm)")
     parser.add_argument(
         "--targets",
         default="LABLE_SiBe_STD95,LABLE_SiBe_AvgMax,LABLE_SiBe_Percentile",
@@ -186,4 +195,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
-    run_evaluation(args.data, args.model, target_list, args.plots, args.raw)
+    run_evaluation(args.data, args.model, target_list, args.plots, args.raw, model_type=args.model_type)
