@@ -18,7 +18,7 @@ def main() -> None:
     parser.add_argument("--model-id", help="Run identifier")
     parser.add_argument(
         "--models",
-        default="gb",
+        default="gb,xgb,lgbm",
         help="Comma separated model types (gb,xgb,lgbm)",
     )
     parser.add_argument(
@@ -86,7 +86,18 @@ def main() -> None:
     for mtype in model_types:
         out_dir = Path(args.model_dir) / part_name / mtype / args.model_id
         out_dir.mkdir(parents=True, exist_ok=True)
-        model_path = out_dir / 'model.joblib'
+        model_path = out_dir / "model.joblib"
+        print(
+            "Model-{} wird mit diesen Parametern trainiert: n_estimators={}, "
+            "learning_rate={}, max_depth={}, subsample={}.".format(
+                mtype,
+                args.n_estimators,
+                args.learning_rate,
+                args.max_depth,
+                args.subsample,
+            )
+        )
+        print(f"Speichere Modell in {out_dir}")
         train_model.run_training_df(
             df,
             str(model_path),
