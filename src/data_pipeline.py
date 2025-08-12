@@ -268,10 +268,30 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         lead_time = int(wbz) if wbz and wbz > 0 else 1
         window = max(1, int(np.ceil(lead_time * 1.25)))
 
-        # cumulative replenishment needed to avoid repeated stock-outs
+        # Progressive & Rolling Differential Prozesse for label calculation
         deficit = (-feat['EoD_Bestand_noSiBe']).clip(lower=0)
-        future_deficit = deficit[::-1].rolling(window, min_periods=1).sum()[::-1]
-        feat['LABLE_StockOut_MinAdd'] = future_deficit
+        deficit_arr = deficit.to_numpy()
+        dte = feat['DaysToEmpty'].to_numpy()
+        idx = np.arange(len(deficit_arr))
+
+        # Progressive Differential Prozess: gradual ramp-up towards stock-out
+        future_idx = np.clip(idx + dte.astype(int), 0, len(deficit_arr) - 1)
+        deficit_at_so = deficit_arr[future_idx]
+        progressive = np.where(
+            dte < window,
+            deficit_at_so * (1 - dte / window),
+            0,
+        )
+
+        # Rolling Differential Prozess: sum of deficits over the look-ahead window
+        rolling = (
+            pd.Series(deficit_arr[::-1])
+            .rolling(window, min_periods=1)
+            .sum()
+            .to_numpy()[::-1]
+        )
+
+        feat['LABLE_StockOut_MinAdd'] = np.maximum(progressive, rolling)
 
         # ----- pseudo label calculation -----
         demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
