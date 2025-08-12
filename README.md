@@ -49,8 +49,8 @@ Each produced feature file contains exactly these columns in the given order:
 - ``Flag_StockOut`` – ``1`` if ``EoD_Bestand_noSiBe`` <= 0
 - ``DaysToEmpty`` – days until stock would be depleted (0 on stock-out, large value when no stock-out is foreseen)
 - ``BestandDelta_7T`` – change in ``EoD_Bestand`` compared to seven days prior
-- ``LABLE_StockOut_MinAdd`` – minimal replenishment to avoid stock-out within
-  lead time
+  - ``LABLE_StockOut_MinAdd`` – cumulative replenishment required to avoid
+    stock-outs within the next ``1.25 × WBZ`` days
 - ``WBZ_Days`` – lead time from the part master data
 - ``LABLE_SiBe_STD95`` – safety stock based on demand variance
 - ``LABLE_SiBe_AvgMax`` – safety stock as difference of max and average demand
