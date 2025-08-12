@@ -266,14 +266,12 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         feat['WBZ_Days'] = wbz
 
         lead_time = int(wbz) if wbz and wbz > 0 else 1
+        window = max(1, int(np.ceil(lead_time * 1.25)))
 
-        # minimal replenishment to avoid stock-out within lead time
-        future_min = (
-            feat['EoD_Bestand_noSiBe'][::-1]
-            .rolling(lead_time, min_periods=1)
-            .min()[::-1]
-        )
-        feat['LABLE_StockOut_MinAdd'] = np.maximum(0, -future_min)
+        # cumulative replenishment needed to avoid repeated stock-outs
+        deficit = (-feat['EoD_Bestand_noSiBe']).clip(lower=0)
+        future_deficit = deficit[::-1].rolling(window, min_periods=1).sum()[::-1]
+        feat['LABLE_StockOut_MinAdd'] = future_deficit
 
         # ----- pseudo label calculation -----
         demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
