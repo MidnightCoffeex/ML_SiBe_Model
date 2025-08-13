@@ -6,6 +6,8 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from sklearn.metrics import (
     mean_absolute_error,
     mean_squared_error,
@@ -96,13 +98,47 @@ def _evaluate_range(
     plt.tight_layout()
     plt.savefig(Path(output_dir) / f"{prefix}_predictions_over_time.png")
 
-    fig2 = px.line(
-        results,
-        x="Datum",
-        y=["Hinterlegter SiBe", pred_col],
-        labels={"value": target, "variable": "Serie"},
-        title="Predictions Over Time",
+    fig2 = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        subplot_titles=("Predictions Over Time", "EoD_Bestand_noSiBe"),
     )
+    fig2.add_trace(
+        go.Scatter(
+            x=results["Datum"],
+            y=results["Hinterlegter SiBe"],
+            mode="lines",
+            name="Hinterlegter SiBe",
+        ),
+        row=1,
+        col=1,
+    )
+    fig2.add_trace(
+        go.Scatter(
+            x=results["Datum"],
+            y=results[pred_col],
+            mode="lines",
+            name=f"Predicted {target}",
+        ),
+        row=1,
+        col=1,
+    )
+    fig2.add_trace(
+        go.Scatter(
+            x=results["Datum"],
+            y=results["EoD_Bestand_noSiBe"],
+            mode="lines",
+            name="EoD_Bestand_noSiBe",
+        ),
+        row=2,
+        col=1,
+    )
+    fig2.update_layout(hovermode="x unified")
+    fig2.update_yaxes(title_text=target, row=1, col=1)
+    fig2.update_yaxes(title_text="EoD_Bestand_noSiBe", row=2, col=1)
+    fig2.update_xaxes(title_text="Datum", row=2, col=1)
     fig2.write_html(Path(output_dir) / f"{prefix}_predictions_over_time.html")
 
 
