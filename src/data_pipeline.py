@@ -54,7 +54,8 @@ def load_csv_file(path: Path, part: str | None = None) -> pd.DataFrame:
     if 'Teil' not in df.columns and part is not None:
         df['Teil'] = part
     if 'Lagerort' in df.columns:
-        df = df[df['Lagerort'].astype(str).str.strip() == '120']
+        loc = pd.to_numeric(df['Lagerort'].astype(str).str.strip(), errors='coerce')
+        df = df[loc == 120]
     for col in df.columns:
         df[col] = _convert_comma_decimal(df[col])
     return df
@@ -106,25 +107,46 @@ def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[st
 ###############################
 
 def _parse_date(df: pd.DataFrame, columns: List[str]) -> pd.Series:
-    """Parse the first available column in ``columns`` as datetime.
+    """Parse date columns with priority.
 
-    Some source tables mix date-only and date-time strings. ``pandas`` will
-    sometimes fail to infer the correct format when such mixtures occur.
-    Using ``format='mixed'`` ensures each entry is parsed individually.
+    Columns are parsed in the given order (e.g. ``Termin`` before
+    ``Solltermin``).  Per row the first valid date is chosen.  This implements
+    the rule *"Termin bevorzugen, sonst der frühere von beiden"*.
     """
+    parsed: List[pd.Series] = []
     for c in columns:
         if c in df.columns:
             col = df[c].astype(str).str.strip()
-            return pd.to_datetime(col, errors='coerce', dayfirst=True, format='mixed')
-    return pd.NaT
+            parsed.append(pd.to_datetime(col, errors='coerce', dayfirst=True, format='mixed'))
+    if not parsed:
+        return pd.Series(pd.NaT, index=df.index)
+    result = parsed[0]
+    for add in parsed[1:]:
+        result = result.combine_first(add)
+    return result
 
 
-def _aggregate_dataset(df: pd.DataFrame, date_columns: List[str]) -> pd.DataFrame:
+def _aggregate_dataset(
+    df: pd.DataFrame,
+    date_columns: List[str],
+    last_cols: set[str] | None = None,
+) -> pd.DataFrame:
     df = df.copy()
-    df['Datum'] = _parse_date(df, date_columns)
-    df = df.dropna(subset=['Datum'])
+    df['Datum_raw'] = _parse_date(df, date_columns)
+    df = df.dropna(subset=['Datum_raw'])
+    df.sort_values('Datum_raw', inplace=True)
+    df['Datum'] = df['Datum_raw'].dt.floor('D')
     num_cols = df.select_dtypes(include='number').columns
-    agg = {c: 'sum' if c in num_cols else 'first' for c in df.columns if c not in {'Teil', 'Datum', 'Dataset', 'ExportDatum'}}
+    agg: Dict[str, str] = {}
+    for c in df.columns:
+        if c in {'Teil', 'Datum', 'Datum_raw', 'Dataset', 'ExportDatum'}:
+            continue
+        if last_cols and c in last_cols:
+            agg[c] = 'last'
+        elif c in num_cols:
+            agg[c] = 'sum'
+        else:
+            agg[c] = 'first'
     grouped = df.groupby(['Teil', 'Datum'], as_index=False).agg(agg)
     return grouped
 
@@ -139,7 +161,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
     agg_tables: Dict[str, pd.DataFrame] = {}
     for name, df in tables.items():
         if name == 'Lagerbew':
-            agg_tables[name] = _aggregate_dataset(df, ['BuchDat'])
+            agg_tables[name] = _aggregate_dataset(df, ['BuchDat'], last_cols={'Lagerbestand'})
         elif name == 'Dispo':
             agg_tables[name] = _aggregate_dataset(df, ['Termin', 'Solltermin'])
         elif name == 'SiBeVerlauf':
@@ -166,55 +188,104 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         if not data:
             continue
 
-        # collect all relevant dates from Lagerbew and Dispo
-        date_sets = []
-        for name in ['Lagerbew', 'Dispo']:
-            if name in data:
-                date_sets.append(pd.to_datetime(data[name]['Datum']))
-        if not date_sets:
+        # extract per-table subsets
+        lb = data.get('Lagerbew', pd.DataFrame(columns=['Datum', 'Lagerbestand']))[
+            ['Datum', 'Lagerbestand']
+        ]
+        best = data.get('Bestand', pd.DataFrame(columns=['Datum', 'Bestand']))[
+            ['Datum', 'Bestand']
+        ]
+        dispo = data.get(
+            'Dispo', pd.DataFrame(columns=['Datum', 'Bedarfsmenge', 'Deckungsmenge'])
+        )[['Datum', 'Bedarfsmenge', 'Deckungsmenge']]
+
+        for df_part in [lb, best, dispo]:
+            if not df_part.empty:
+                df_part['Datum'] = pd.to_datetime(df_part['Datum'])
+
+        if not dispo.empty:
+            dispo['Bedarfsmenge'] = pd.to_numeric(
+                dispo['Bedarfsmenge'], errors='coerce'
+            ).fillna(0)
+            dispo['Deckungsmenge'] = pd.to_numeric(
+                dispo['Deckungsmenge'], errors='coerce'
+            ).fillna(0)
+            # net = Deckungsmenge - Bedarfsmenge (positive = supply, negative = demand)
+            dispo['net'] = dispo['Deckungsmenge'] - dispo['Bedarfsmenge']
+
+        first_dispo_date = dispo['Datum'].min() if not dispo.empty else None
+        baseline = 0.0
+        baseline_date = None
+        if first_dispo_date is not None:
+            if not lb.empty:
+                lb_before = lb[lb['Datum'] <= first_dispo_date]
+                if not lb_before.empty:
+                    row = lb_before.sort_values('Datum').iloc[-1]
+                    baseline = float(pd.to_numeric(row['Lagerbestand'], errors='coerce'))
+                    baseline_date = row['Datum']
+            if baseline_date is None and not best.empty:
+                best_before = best[best['Datum'] <= first_dispo_date]
+                if not best_before.empty:
+                    row = best_before.sort_values('Datum').iloc[-1]
+                    baseline = float(pd.to_numeric(row['Bestand'], errors='coerce'))
+                    baseline_date = row['Datum']
+        else:
+            if not lb.empty:
+                row = lb.sort_values('Datum').iloc[-1]
+                baseline = float(pd.to_numeric(row['Lagerbestand'], errors='coerce'))
+                baseline_date = row['Datum']
+            elif not best.empty:
+                row = best.sort_values('Datum').iloc[-1]
+                baseline = float(pd.to_numeric(row['Bestand'], errors='coerce'))
+                baseline_date = row['Datum']
+
+        # date skeleton
+        date_set: set[pd.Timestamp] = set()
+        if not lb.empty:
+            date_set.update(lb['Datum'])
+        if not dispo.empty:
+            date_set.update(dispo['Datum'])
+        if baseline_date is not None:
+            date_set.add(baseline_date)
+        if not date_set:
             continue
-        all_dates = pd.concat(date_sets).dropna().sort_values().unique()
-        feat = pd.DataFrame({'Datum': all_dates})
+        feat = pd.DataFrame({'Datum': sorted(date_set)})
         feat['Teil'] = part
 
-        # baseline inventory
-        if 'Lagerbew' in data:
-            lb = data['Lagerbew'][['Datum', 'Lagerbestand']].copy()
-            lb['Datum'] = pd.to_datetime(lb['Datum'])
+        # merge demand and net values
+        if not dispo.empty:
+            dispo_agg = dispo[['Datum', 'Bedarfsmenge', 'net']].rename(
+                columns={'Bedarfsmenge': 'Bedarfsmenge_daily'}
+            )
+            feat = pd.merge(feat, dispo_agg, on='Datum', how='left')
+            feat['Bedarfsmenge_daily'] = feat['Bedarfsmenge_daily'].fillna(0)
+            feat['net'] = feat['net'].fillna(0)
+            dispo_sorted = dispo.sort_values('Datum').copy()
+            dispo_sorted['cum_net'] = dispo_sorted['net'].cumsum()
+            feat = pd.merge(feat, dispo_sorted[['Datum', 'cum_net']], on='Datum', how='left')
+            feat['cum_net'] = feat['cum_net'].fillna(method='ffill').fillna(0)
+        else:
+            feat['Bedarfsmenge_daily'] = 0
+            feat['net'] = 0
+            feat['cum_net'] = 0
+
+        # merge Lagerbestand and apply baseline if needed
+        if not lb.empty:
             feat = pd.merge(feat, lb, on='Datum', how='left')
         else:
-            feat['Lagerbestand'] = pd.NA
+            feat['Lagerbestand'] = np.nan
+        if baseline_date is not None:
+            mask = feat['Datum'] == baseline_date
+            feat.loc[mask, 'Lagerbestand'] = feat.loc[mask, 'Lagerbestand'].fillna(baseline)
 
-        if 'Bestand' in data:
-            best = data['Bestand'][['Datum', 'Bestand']].copy()
-            best['Datum'] = pd.to_datetime(best['Datum'])
-            feat = pd.merge(feat, best, on='Datum', how='left')
-            feat['Lagerbestand'] = feat['Lagerbestand'].combine_first(feat['Bestand'])
-            feat.drop(columns=['Bestand'], inplace=True)
-
-        feat.sort_values('Datum', inplace=True)
-        feat['Lagerbestand'] = feat['Lagerbestand'].ffill().fillna(0)
-
-        # planned movements from Dispo
-        if 'Dispo' in data:
-            dispo_raw = data['Dispo'][['Datum', 'Bedarfsmenge', 'Deckungsmenge']].copy()
-            dispo_raw['Bedarfsmenge'] = pd.to_numeric(dispo_raw['Bedarfsmenge'], errors='coerce').fillna(0)
-            dispo_raw['Deckungsmenge'] = pd.to_numeric(dispo_raw['Deckungsmenge'], errors='coerce').fillna(0)
-            # keep daily demand for later feature engineering
-            demand_daily = dispo_raw.groupby('Datum', as_index=False)['Bedarfsmenge'].sum()
-            feat = pd.merge(feat, demand_daily, on='Datum', how='left')
-            feat['Bedarfsmenge'] = feat['Bedarfsmenge'].fillna(0)
-
-            dispo_raw['net'] = dispo_raw['Deckungsmenge'] - dispo_raw['Bedarfsmenge']
-            dispo = dispo_raw.groupby('Datum', as_index=False)['net'].sum()
-            feat = pd.merge(feat, dispo, on='Datum', how='left')
-            feat['net'] = feat['net'].fillna(0)
-            feat['cum_dispo'] = feat['net'].cumsum()
+        if first_dispo_date is not None:
+            feat['EoD_Bestand'] = np.where(
+                feat['Datum'] < first_dispo_date,
+                feat['Lagerbestand'],
+                baseline + feat['cum_net'],
+            )
         else:
-            feat['cum_dispo'] = 0
-            feat['Bedarfsmenge'] = 0
-
-        feat['EoD_Bestand'] = feat['Lagerbestand'] + feat['cum_dispo']
+            feat['EoD_Bestand'] = feat['Lagerbestand'].fillna(baseline)
         feat['EoD_Bestand'] = pd.to_numeric(feat['EoD_Bestand'], errors='coerce').fillna(0)
 
         # safety stock history
@@ -318,6 +389,9 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 'Teil',
                 'Datum',
                 'EoD_Bestand',
+                'Bedarfsmenge_daily',
+                'net',
+                'cum_net',
                 'Hinterlegter SiBe',
                 'EoD_Bestand_noSiBe',
                 'Flag_StockOut',
