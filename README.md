@@ -101,6 +101,38 @@ additional packages are required:
 python3.11 -m pip install xgboost lightgbm
 ```
 
+## Step-by-step guide
+
+1. **Features erzeugen**
+
+   ```bash
+   python3.11 scripts/build_features.py
+   ```
+
+   - Pfade zu ``Rohdaten`` und ``Features`` werden abgefragt.
+   - Für jedes Teil entsteht ``Features/<Teil>/features.parquet`` und ``features.xlsx``.
+   - Die Konsole zeigt den Fortschritt je verarbeiteter Datei.
+
+2. **Modelle trainieren**
+
+   ```bash
+   python3.11 scripts/train.py --models gb,xgb,lgbm
+   ```
+
+   - Wähle Feature-Ordner, Teilnummer (``ALL`` für alle) und eine Modell-ID.
+   - Es werden ``model.joblib``, ``metrics.csv`` und ``feature_importances.csv`` unter ``Modelle/<Teil>/<Modelltyp>/<ID>/`` gespeichert.
+   - Die Ausgabe enthält Validierungs- und Testmetriken (MAE, RMSE, R², MAPE).
+
+3. **Modelle auswerten**
+
+   ```bash
+   python3.11 scripts/evaluate.py --model-type gb --model-id 1
+   ```
+
+   - Gibt Features-Pfad, Teil, Modellverzeichnis und Zielordner für Plots an.
+   - Ergebnisse landen unter ``plots/<Teil>/<Modelltyp>/<ID>/`` und umfassen ``*_predictions.csv``/``.xlsx`` sowie PNG/HTML-Grafiken.
+   - Die Konsole meldet erneut MAE, RMSE, R² und MAPE.
+
 ## Running the pipeline
 
 To generate the feature table from the raw CSV files use the wrapper in
@@ -112,7 +144,9 @@ python3.11 scripts/build_features.py
 
 Beim Aufruf werden die benötigten Pfade interaktiv abgefragt. Die Pipeline legt
 für jedes Teil einen Unterordner unter ``Features/`` an und speichert dort
-sowohl eine ``features.parquet`` als auch eine ``features.xlsx`` Datei.
+sowohl eine ``features.parquet`` als auch eine ``features.xlsx`` Datei. Die
+Parquet-Datei dient als direkte Eingabe für die Modelle, die Excel-Datei zur
+manuellen Prüfung.
 
 ## Training models
 
@@ -133,7 +167,9 @@ and a model identifier are requested. Hyperparameters such as
 ``n_estimators``, ``learning_rate``, ``max_depth`` and ``subsample`` can be
 entered manually or left at their defaults. Results are stored under
 ``Modelle/<Teil>/<Modelltyp>/<Modellnummer>/`` containing the trained model,
-metrics and feature importances.
+metrics and feature importances. ``metrics.csv`` listet Kennzahlen wie MAE
+(Mean Absolute Error), RMSE, R² und MAPE, während ``feature_importances.csv``
+den Einfluss jeder Spalte auf die Vorhersage zeigt.
 
 Training assigns a higher weight to rows with imminent stock-outs
 (``LABLE_StockOut_MinAdd`` > 0). An optional time-series cross-validation can
@@ -156,6 +192,11 @@ both as PNG and HTML files:
 - ``actual_vs_pred.png`` / ``.html`` – scatter plot of predicted versus actual values
 - ``predictions_over_time.png`` / ``.html`` – comparison of predictions and actual values by date
 - ``training_history.png`` / ``.html`` – model deviance over boosting iterations
+
+``*_predictions.csv`` und ``*_predictions.xlsx`` enthalten die berechneten
+Werte je Datum. MAE (Mean Absolute Error) misst die durchschnittliche Abweichung,
+RMSE die quadratische Abweichung, R² den Anteil erklärter Varianz und MAPE die
+prozentuale Abweichung.
 
 Die ausgegebene Feature-Importance basiert auf einer Permutation Importance des
 Test-Splits. Hohe Werte bedeuten, dass die jeweilige Spalte einen großen
