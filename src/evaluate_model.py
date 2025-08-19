@@ -99,11 +99,15 @@ def _evaluate_range(
     plt.savefig(Path(output_dir) / f"{prefix}_predictions_over_time.png")
 
     fig2 = make_subplots(
-        rows=2,
+        rows=3,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.1,
-        subplot_titles=("Predictions Over Time", "EoD_Bestand_noSiBe"),
+        subplot_titles=(
+            "Predictions Over Time",
+            "EoD_Bestand_noSiBe",
+            f"EoD_Bestand_noSiBe + Predicted {target}",
+        ),
     )
     fig2.add_trace(
         go.Scatter(
@@ -135,10 +139,41 @@ def _evaluate_range(
         row=2,
         col=1,
     )
+
+    combined = results["EoD_Bestand_noSiBe"] + results[pred_col]
+    combined_pos = combined.where(combined > 0)
+    combined_neg = combined.where(combined <= 0)
+
+    fig2.add_trace(
+        go.Scatter(
+            x=results["Datum"],
+            y=combined_pos,
+            mode="lines",
+            name="EoD_Bestand_noSiBe + Predicted",
+            line=dict(color="blue"),
+        ),
+        row=3,
+        col=1,
+    )
+    fig2.add_trace(
+        go.Scatter(
+            x=results["Datum"],
+            y=combined_neg,
+            mode="lines",
+            showlegend=False,
+            line=dict(color="red"),
+        ),
+        row=3,
+        col=1,
+    )
+
     fig2.update_layout(hovermode="x unified")
     fig2.update_yaxes(title_text=target, row=1, col=1)
     fig2.update_yaxes(title_text="EoD_Bestand_noSiBe", row=2, col=1)
-    fig2.update_xaxes(title_text="Datum", row=2, col=1)
+    fig2.update_yaxes(
+        title_text=f"EoD_Bestand_noSiBe + Predicted {target}", row=3, col=1
+    )
+    fig2.update_xaxes(title_text="Datum", row=3, col=1)
     fig2.write_html(Path(output_dir) / f"{prefix}_predictions_over_time.html")
 
 
