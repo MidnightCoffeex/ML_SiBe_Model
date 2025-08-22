@@ -17,20 +17,28 @@ from sklearn.inspection import permutation_importance
 
 
 def load_features(path: str) -> pd.DataFrame:
-    """Load pre-computed features from a parquet file."""
-    return pd.read_parquet(path)
+    """Load pre-computed features from CSV or Parquet."""
+    from .data_pipeline import safe_read_features
+
+    return safe_read_features(path)
 
 
-def prepare_data(df: pd.DataFrame, targets: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return feature matrix ``X`` and target ``y`` with rows containing NaN
-    in any target removed."""
+def split_X_y(df: pd.DataFrame, targets: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split DataFrame into feature matrix ``X`` and target ``y``.
+
+    All columns starting with ``LABLE_`` are treated as targets and therefore
+    removed from ``X`` to avoid target leakage.
+    """
+
     missing = [t for t in targets if t not in df.columns]
     if missing:
         raise ValueError(f"Target column(s) {missing} not found in dataset")
     df = df.dropna(subset=targets)
     y = df[targets]
-    X = df.drop(columns=targets + ["EoD_Bestand"])  # exclude EoD_Bestand from features
+    feature_cols = [c for c in df.columns if c not in targets and not c.startswith("LABLE_")]
+    X = df[feature_cols]
     X = X.select_dtypes(include=["number"]).fillna(0)
+    assert not any(c.startswith("LABLE_") for c in X.columns), "Leakage detected"
     return X, y
 
 
@@ -89,8 +97,15 @@ def train_lightgbm_model(
     *,
     n_estimators: int = 100,
     learning_rate: float = 0.1,
-    max_depth: int = -1,
+    max_depth: int = 4,
     subsample: float = 1.0,
+    num_leaves: int = 15,
+    min_data_in_leaf: int = 20,
+    feature_fraction: float = 0.9,
+    bagging_fraction: float = 0.9,
+    bagging_freq: int = 1,
+    reg_lambda: float = 1.0,
+    min_gain_to_split: float = 0.0,
     sample_weight: np.ndarray | None = None,
 ) -> MultiOutputRegressor:
     """Train a multi-output LightGBM regressor."""
@@ -101,6 +116,13 @@ def train_lightgbm_model(
         learning_rate=learning_rate,
         max_depth=max_depth,
         subsample=subsample,
+        num_leaves=num_leaves,
+        min_data_in_leaf=min_data_in_leaf,
+        feature_fraction=feature_fraction,
+        bagging_fraction=bagging_fraction,
+        bagging_freq=bagging_freq,
+        reg_lambda=reg_lambda,
+        min_gain_to_split=min_gain_to_split,
         random_state=0,
     )
     model = MultiOutputRegressor(base)
@@ -131,7 +153,7 @@ def run_training_df(
     split_indices: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None,
 ) -> tuple[list[float], list[float]]:
     """Train a model from an already loaded DataFrame."""
-    X, y = prepare_data(df, targets)
+    X, y = split_X_y(df, targets)
     weights = np.ones(len(y))
     if "LABLE_StockOut_MinAdd" in y.columns:
         weights[y["LABLE_StockOut_MinAdd"] > 0] = 5.0
@@ -139,7 +161,8 @@ def run_training_df(
         print("Warning: very few training samples; results may be unreliable")
 
     if split_indices is None:
-        tscv = TimeSeriesSplit(n_splits=5)
+        n_splits = cv_splits if cv_splits is not None else 5
+        tscv = TimeSeriesSplit(n_splits=n_splits)
         splits = list(tscv.split(X))
         train_idx, val_idx = splits[-2]
         train_full_idx, test_idx = splits[-1]
@@ -151,7 +174,12 @@ def run_training_df(
     elif model_type == "xgb":
         trainer = train_xgboost_model
     elif model_type == "lgbm":
-        trainer = train_lightgbm_model
+        trainer = lambda X, y, **kw: train_lightgbm_model(
+            X,
+            y,
+            min_data_in_leaf=max(2, int(0.05 * len(train_idx))),
+            **kw,
+        )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -288,8 +316,8 @@ def run_training(
     cv_splits: int | None = None,
 ) -> None:
     df = load_features(features_path)
-    X, _ = prepare_data(df, targets)
-    tscv = TimeSeriesSplit(n_splits=5)
+    X, _ = split_X_y(df, targets)
+    tscv = TimeSeriesSplit(n_splits=cv_splits or 5)
     splits = list(tscv.split(X))
     split_indices = (*splits[-2], *splits[-1])  # train, val, train_full, test
 

@@ -407,6 +407,114 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
     return processed
 
 
+###############################
+# New high-level helpers
+###############################
+
+def safe_read_features(path: str | Path) -> pd.DataFrame:
+    """Read a feature table from CSV or Parquet.
+
+    ``path`` can either point directly to a file or to a directory containing
+    ``features.csv``/``features.parquet``.  CSV reading falls back to parsing
+    the ``Datum`` column as dates so that subsequent time based operations work
+    without additional conversions.
+    """
+
+    p = Path(path)
+    if p.is_dir():
+        csv_path = p / "features.csv"
+        pq_path = p / "features.parquet"
+        if csv_path.exists():
+            return pd.read_csv(csv_path, parse_dates=["Datum"])
+        if pq_path.exists():
+            return pd.read_parquet(pq_path)
+        raise FileNotFoundError(f"No features file found in {p}")
+    if p.suffix.lower() == ".csv":
+        return pd.read_csv(p, parse_dates=["Datum"])
+    if p.suffix.lower() in {".parquet", ".pq"}:
+        return pd.read_parquet(p)
+    raise ValueError(f"Unsupported feature file: {p}")
+
+
+def align_schema(df_h: pd.DataFrame, df_d: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Align schemas of historical and dispo feature tables.
+
+    The function ensures identical feature columns (excluding any ``LABLE_*``
+    targets) and column order.  Columns missing in either frame are added and
+    filled with ``0`` so that downstream model code can rely on a stable
+    feature set.
+    """
+
+    feature_cols: list[str] = []
+    for col in list(df_h.columns) + list(df_d.columns):
+        if col.startswith("LABLE_"):
+            continue
+        if col not in feature_cols:
+            feature_cols.append(col)
+
+    h_aligned = df_h.copy()
+    d_aligned = df_d.copy()
+    for col in feature_cols:
+        if col not in h_aligned.columns:
+            h_aligned[col] = 0
+        if col not in d_aligned.columns:
+            d_aligned[col] = 0
+    h_aligned = h_aligned[feature_cols + [c for c in h_aligned.columns if c.startswith("LABLE_")]]
+    d_aligned = d_aligned[feature_cols]
+    return h_aligned, d_aligned
+
+
+def build_historical_features(
+    raw_dir: str, cutoff_date: str | None = None
+) -> tuple[Dict[str, pd.DataFrame], pd.Timestamp]:
+    """Return historical feature tables per part and the applied cutoff date."""
+
+    feats = build_features_by_part(raw_dir)
+    if cutoff_date:
+        cutoff = pd.to_datetime(cutoff_date)
+    else:
+        cutoff = max(df["Datum"].max() for df in feats.values())
+    hist: Dict[str, pd.DataFrame] = {}
+    for part, df in feats.items():
+        hist[part] = df[df["Datum"] <= cutoff].copy()
+    return hist, cutoff
+
+
+def build_dispo_features(
+    raw_dir: str,
+    seed_eod_from_h: pd.DataFrame,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp | None = None,
+) -> Dict[str, pd.DataFrame]:
+    """Build forward-looking dispo feature tables.
+
+    Only simulated inventory trajectories are generated.  Target columns are
+    intentionally omitted to avoid information leakage.
+    """
+
+    column_map = _load_column_map('Spaltenbedeutung.xlsx')
+    tables = load_all_tables(raw_dir, column_map)
+    if 'Dispo' not in tables:
+        return {}
+    dispo = _prepare_dispo(tables['Dispo'])
+    dispo['Datum'] = pd.to_datetime(dispo['Datum'])
+    if end_date is None:
+        end_date = dispo['Datum'].max()
+
+    seeds = seed_eod_from_h.set_index('Teil')['EoD_Bestand']
+    out: Dict[str, pd.DataFrame] = {}
+    for part, seed in seeds.items():
+        part_df = dispo[(dispo['Teil'].astype(str) == str(part)) & (dispo['Datum'] >= start_date) & (dispo['Datum'] <= end_date)].copy()
+        if part_df.empty:
+            continue
+        part_df = part_df.sort_values('Datum')
+        part_df['cum_net'] = part_df['net'].cumsum()
+        part_df['EoD_Bestand'] = seed + part_df['cum_net']
+        part_df = part_df[['Teil', 'Datum', 'EoD_Bestand']]
+        out[str(part)] = part_df
+    return out
+
+
 def save_feature_folders(features: Dict[str, pd.DataFrame], output_dir: str = 'Features') -> None:
     """Write each part's features to ``output_dir/<part>``.
 

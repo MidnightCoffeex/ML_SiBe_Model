@@ -18,7 +18,7 @@ from sklearn.model_selection import TimeSeriesSplit
 import pandas as pd
 import numpy as np
 
-from .train_model import load_features, prepare_data
+from .train_model import load_features, split_X_y
 
 
 def _dispo_date_range(raw_dir: str, part: str) -> Tuple[pd.Timestamp | None, pd.Timestamp | None]:
@@ -194,7 +194,7 @@ def run_evaluation(
                 break
 
     df = load_features(features_path)
-    X, y = prepare_data(df, targets)
+    X, y = split_X_y(df, targets)
     tscv = TimeSeriesSplit(n_splits=5)
     splits = list(tscv.split(X))
     train_idx, val_idx = splits[-2]
