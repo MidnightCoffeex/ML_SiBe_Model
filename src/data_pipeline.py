@@ -427,6 +427,100 @@ def run_pipeline(raw_dir: str, output_dir: str = 'Features') -> None:
     save_feature_folders(features, output_dir)
 
 
+# ---------------------------------------------------------------------------
+# New helper functions for refactored scripts
+# ---------------------------------------------------------------------------
+
+
+def build_historical_features(raw_dir: str, cutoff_date: pd.Timestamp | None) -> Dict[str, pd.DataFrame]:
+    """Return historical feature tables filtered up to ``cutoff_date``.
+
+    If ``cutoff_date`` is ``None`` the full available history is returned.
+    """
+    feats = build_features_by_part(raw_dir)
+    if cutoff_date is None:
+        return feats
+    out: Dict[str, pd.DataFrame] = {}
+    for part, df in feats.items():
+        mask = pd.to_datetime(df["Datum"]) <= pd.to_datetime(cutoff_date)
+        out[part] = df.loc[mask].copy()
+    return out
+
+
+def build_dispo_features(
+    raw_dir: str,
+    seed_eod_from_H: Dict[str, pd.DataFrame],
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+) -> Dict[str, pd.DataFrame]:
+    """Very small forward simulation used for the interactive example.
+
+    The implementation here is intentionally simplistic: it only carries the
+    last known end-of-day stock forward without considering planned
+    movements.  The function exists mainly to illustrate the required API.
+    """
+
+    parts = seed_eod_from_H.keys()
+    date_range = pd.date_range(start_date, end_date, freq="D")
+    dispo: Dict[str, pd.DataFrame] = {}
+    for part in parts:
+        seed = seed_eod_from_H[part].iloc[0]
+        base_cols = [
+            "Teil",
+            "Datum",
+            "EoD_Bestand",
+            "Hinterlegter SiBe",
+            "EoD_Bestand_noSiBe",
+            "Flag_StockOut",
+            "DaysToEmpty",
+            "BestandDelta_7T",
+            "WBZ_Days",
+        ]
+        df = pd.DataFrame({"Datum": date_range})
+        df["Teil"] = seed["Teil"] if "Teil" in seed else part
+        df["EoD_Bestand"] = seed.get("EoD_Bestand", 0)
+        df["Hinterlegter SiBe"] = 0
+        df["EoD_Bestand_noSiBe"] = df["EoD_Bestand"]
+        df["Flag_StockOut"] = (df["EoD_Bestand_noSiBe"] <= 0).astype(int)
+        df["DaysToEmpty"] = np.nan
+        df["BestandDelta_7T"] = 0
+        df["WBZ_Days"] = seed.get("WBZ_Days", np.nan)
+        dispo[part] = df[base_cols]
+    return dispo
+
+
+def align_schema(df_H: pd.DataFrame, df_D: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Align columns of ``df_H`` and ``df_D`` to the same schema.
+
+    Missing columns are filled with zeros; column order is harmonised.
+    """
+
+    cols = sorted(set(df_H.columns) | set(df_D.columns))
+    h = df_H.copy()
+    d = df_D.copy()
+    for col in cols:
+        if col not in h.columns:
+            h[col] = 0
+        if col not in d.columns:
+            d[col] = 0
+    h = h[cols]
+    d = d[cols]
+    return h, d
+
+
+def safe_read_features(path: str) -> pd.DataFrame:
+    """Read a feature file from CSV or Parquet automatically."""
+    p = Path(path)
+    if p.suffix.lower() == ".csv":
+        return pd.read_csv(p)
+    if p.suffix.lower() in {".parquet", ".pq"}:
+        return pd.read_parquet(p)
+    try:
+        return pd.read_csv(p)
+    except Exception:
+        return pd.read_parquet(p)
+
+
 if __name__ == '__main__':
     import argparse
 

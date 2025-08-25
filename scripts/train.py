@@ -1,113 +1,92 @@
 #!/usr/bin/env python3
-"""Wrapper script for model training."""
+"""Train models using pre-computed historical features."""
 from pathlib import Path
 import sys
-import pandas as pd
-from sklearn.model_selection import TimeSeriesSplit
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from src import train_model
+from src import train_model, data_pipeline
+
+
+def _prompt(prompt: str, default: str | None = None) -> str:
+    val = input(prompt)
+    if not val and default is not None:
+        return default
+    return val
 
 
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Train the safety stock model")
-    parser.add_argument("--data", help="Root directory with feature folders")
-    parser.add_argument("--part", help="Specific part number or 'ALL'")
-    parser.add_argument("--model-dir", help="Base directory for models")
-    parser.add_argument("--model-id", help="Run identifier")
-    parser.add_argument(
-        "--models",
-        default="gb,xgb,lgbm",
-        help="Comma separated model types (gb,xgb,lgbm)",
-    )
-    parser.add_argument(
-        "--targets",
-        default="LABLE_StockOut_MinAdd",
-        help="Comma separated target column names",
-    )
-    parser.add_argument("--n_estimators", type=int)
-    parser.add_argument("--learning_rate", type=float)
-    parser.add_argument("--max_depth", type=int)
-    parser.add_argument("--subsample", type=float)
-    parser.add_argument("--cv", type=int, help="Number of cross-validation folds")
+    parser.add_argument("--features-dir", help="Verzeichnis mit H-Features")
+    parser.add_argument("--part", help="Teil-Nummer oder ALL")
+    parser.add_argument("--targets", help="Kommagetrennte Target-Spalten")
+    parser.add_argument("--cv-splits", help="Anzahl CV-Splits oder auto")
+    parser.add_argument("--model-dir", help="Ausgabeordner für Modelle")
+    parser.add_argument("--models", help="Kommagetrennte Modelltypen (gb,xgb,lgbm)")
+    parser.add_argument("--model-id", help="Laufende Nummer")
     args = parser.parse_args()
 
-    if not args.data:
-        args.data = input("Pfad zu Features [Features]: ") or "Features"
+    if not args.features_dir:
+        args.features_dir = _prompt("Pfad zu Features_H [Features_H]: ", "Features_H")
     if not args.part:
-        args.part = input("Teil-Nummer oder ALL [ALL]: ") or "ALL"
+        args.part = _prompt("Teil-Nummer oder ALL [ALL]: ", "ALL")
+    if not args.targets:
+        args.targets = _prompt("Targets [LABLE_StockOut_MinAdd]: ", "LABLE_StockOut_MinAdd")
+    if not args.cv_splits:
+        args.cv_splits = _prompt("cv_splits [auto]: ", "auto")
     if not args.model_dir:
-        args.model_dir = "Modelle"
+        args.model_dir = _prompt("Modelldir [Models]: ", "Models")
+    if not args.models:
+        args.models = _prompt("Modelle (gb,xgb,lgbm) [gb,xgb,lgbm]: ", "gb,xgb,lgbm")
+    if not args.model_id:
+        args.model_id = ""
 
-    if args.n_estimators is None:
-        entry = input("n_estimators [100]: ")
-        args.n_estimators = int(entry) if entry else 100
-    if args.learning_rate is None:
-        entry = input("learning_rate [0.1]: ")
-        args.learning_rate = float(entry) if entry else 0.1
-    if args.max_depth is None:
-        entry = input("max_depth [3]: ")
-        args.max_depth = int(entry) if entry else 3
-    if args.subsample is None:
-        entry = input("subsample [1.0]: ")
-        args.subsample = float(entry) if entry else 1.0
-    if args.cv is None:
-        entry = input("cv_splits [0]: ")
-        args.cv = int(entry) if entry else 0
-
-    part_name = args.part if args.part else "ALL"
-
+    targets = [t.strip() for t in args.targets.split(',') if t.strip()]
     model_types = [m.strip() for m in args.models.split(',') if m.strip()]
+
+    part_name = args.part
+    if args.part.upper() == "ALL":
+        frames = []
+        for f in Path(args.features_dir).glob('*/features.csv'):
+            frames.append(data_pipeline.safe_read_features(f))
+        df = __import__('pandas').concat(frames, ignore_index=True)
+        part_name = "ALL"
+    else:
+        df = data_pipeline.safe_read_features(Path(args.features_dir) / args.part / 'features.csv')
+        part_name = args.part
+
+    X, _ = train_model.prepare_data(df, targets)
+
+    if args.cv_splits.lower() == 'auto':
+        n_splits = min(5, max(2, len(X) // 50))
+    else:
+        try:
+            n_splits = int(args.cv_splits)
+        except ValueError:
+            n_splits = 2
+    n_splits = max(2, min(n_splits, max(2, len(X) - 1)))
+    from sklearn.model_selection import TimeSeriesSplit
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    splits = list(tscv.split(X))
+    split_indices = (splits[-2][0], splits[-2][1], splits[-1][0], splits[-1][1])
 
     if not args.model_id:
         part_dir = Path(args.model_dir) / part_name / model_types[0]
         existing = [int(p.name) for p in part_dir.glob('*') if p.is_dir() and p.name.isdigit()]
-        next_id = max(existing, default=0) + 1
-        args.model_id = str(next_id)
+        args.model_id = str(max(existing, default=0) + 1)
         print(f"Automatisch gewählte Nummer: {args.model_id}")
-
-    if args.part.upper() == "ALL":
-        frames = []
-        for f in Path(args.data).glob('*/features.parquet'):
-            frames.append(pd.read_parquet(f))
-        df = pd.concat(frames, ignore_index=True)
-        part_name = "ALL"
-    else:
-        df = pd.read_parquet(Path(args.data) / args.part / 'features.parquet')
-        part_name = args.part
-
-    target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
-    X, _ = train_model.prepare_data(df, target_list)
-    tscv = TimeSeriesSplit(n_splits=5)
-    splits = list(tscv.split(X))
-    split_indices = (splits[-2][0], splits[-2][1], splits[-1][0], splits[-1][1])
 
     for mtype in model_types:
         out_dir = Path(args.model_dir) / part_name / mtype / args.model_id
         out_dir.mkdir(parents=True, exist_ok=True)
-        model_path = out_dir / "model.joblib"
-        print(
-            "Model-{} wird mit diesen Parametern trainiert: n_estimators={}, "
-            "learning_rate={}, max_depth={}, subsample={}.".format(
-                mtype,
-                args.n_estimators,
-                args.learning_rate,
-                args.max_depth,
-                args.subsample,
-            )
-        )
-        print(f"Speichere Modell in {out_dir}")
+        model_path = out_dir / 'model.joblib'
+        print(f"Trainiere {mtype} → {model_path}")
         train_model.run_training_df(
             df,
             str(model_path),
-            target_list,
-            n_estimators=args.n_estimators,
-            learning_rate=args.learning_rate,
-            max_depth=args.max_depth,
-            subsample=args.subsample,
-            cv_splits=args.cv if args.cv and args.cv > 1 else None,
+            targets,
             model_type=mtype,
+            cv_splits=n_splits,
             split_indices=split_indices,
         )
 

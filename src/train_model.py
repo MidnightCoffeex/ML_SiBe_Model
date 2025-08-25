@@ -29,7 +29,9 @@ def prepare_data(df: pd.DataFrame, targets: list[str]) -> tuple[pd.DataFrame, pd
         raise ValueError(f"Target column(s) {missing} not found in dataset")
     df = df.dropna(subset=targets)
     y = df[targets]
-    X = df.drop(columns=targets + ["EoD_Bestand"])  # exclude EoD_Bestand from features
+    drop_cols = targets + ["EoD_Bestand"]
+    drop_cols += [c for c in df.columns if c.startswith("LABLE_")]
+    X = df.drop(columns=drop_cols, errors="ignore")
     X = X.select_dtypes(include=["number"]).fillna(0)
     return X, y
 
@@ -155,6 +157,20 @@ def run_training_df(
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
+    lgbm_extra = {}
+    if model_type == "lgbm":
+        lgbm_extra = {
+            "num_leaves": 15,
+            "max_depth": 4,
+            "min_data_in_leaf": max(2, int(0.05 * len(train_idx))),
+            "min_gain_to_split": 0.0,
+            "feature_fraction": 0.9,
+            "bagging_fraction": 0.9,
+            "bagging_freq": 1,
+            "reg_lambda": 1.0,
+            "verbose": -1,
+        }
+
     model = trainer(
         X.iloc[train_idx],
         y.iloc[train_idx],
@@ -163,6 +179,7 @@ def run_training_df(
         max_depth=max_depth,
         subsample=subsample,
         sample_weight=weights[train_idx],
+        **lgbm_extra,
     )
     val_pred = model.predict(X.iloc[val_idx])
     val_mae = mean_absolute_error(y.iloc[val_idx], val_pred, multioutput="raw_values")
@@ -171,6 +188,20 @@ def run_training_df(
     val_mape = mean_absolute_percentage_error(y.iloc[val_idx], val_pred)
 
     # refit on all data except test
+    lgbm_extra = {}
+    if model_type == "lgbm":
+        lgbm_extra = {
+            "num_leaves": 15,
+            "max_depth": 4,
+            "min_data_in_leaf": max(2, int(0.05 * len(train_full_idx))),
+            "min_gain_to_split": 0.0,
+            "feature_fraction": 0.9,
+            "bagging_fraction": 0.9,
+            "bagging_freq": 1,
+            "reg_lambda": 1.0,
+            "verbose": -1,
+        }
+
     model = trainer(
         X.iloc[train_full_idx],
         y.iloc[train_full_idx],
@@ -179,10 +210,14 @@ def run_training_df(
         max_depth=max_depth,
         subsample=subsample,
         sample_weight=weights[train_full_idx],
+        **lgbm_extra,
     )
     Path(model_path).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, model_path)
     print(f"Model saved to {model_path}")
+    import json
+    with open(Path(model_path).with_name("feature_cols.json"), "w", encoding="utf-8") as fh:
+        json.dump(list(X.columns), fh, ensure_ascii=False, indent=2)
     test_pred = model.predict(X.iloc[test_idx])
     test_mae = mean_absolute_error(y.iloc[test_idx], test_pred, multioutput="raw_values")
     test_rmse = np.sqrt(mean_squared_error(y.iloc[test_idx], test_pred, multioutput="raw_values"))
