@@ -1,0 +1,24 @@
+Pipeline konnte mit kompletten Rohdaten nicht erfolgreich ausgeführt werden. Der Vorgang wurde nach längerer Rechenzeit beendet (möglicherweise durch Ressourcenbegrenzungen). Mit einer kleineren Teilmenge der Dateien funktioniert der Ablauf jedoch.
+*Nacharbeiten:* README ergänzt, dass bei vielen Dateien sehr hoher Speicherbedarf entstehen kann.
+
+Beim ersten Aufruf der Skripte trat ein Importfehler (``ModuleNotFoundError: No module named 'src'``) auf. Die Pfade wurden in den Skripten ergänzt, damit sie direkt per ``python`` ausführbar sind.
+
+Zum Speichern der Parquet-Datei wird ein zusätzliches Paket benötigt (``pyarrow``). Ohne dieses erscheint eine Fehlermeldung.
+*Nacharbeiten:* Paket in ``requirements.txt`` aufgenommen und beim Test installiert.
+
+Beim Training schlug der erste Versuch fehl, weil die Zielspalte ``SiBe_Sicherheitsbest`` teilweise fehlende Werte enthielt. Nach dem Entfernen dieser Zeilen konnte das Modell trainiert werden (Validierungs-MAE ca. 0.005).
+*Nacharbeiten:* ``prepare_data`` entfernt nun Zeilen mit fehlendem Zielwert automatisch, sodass Training und Evaluation ohne Zusatzschritte funktionieren.
+
+Auch die Auswertung musste zuvor fehlende Werte entfernen. Die erzeugten Plots (``actual_vs_pred.png``, ``training_history.png`` und ``predictions_over_time.png``) wurden korrekt angelegt.
+
+Verbesserungsvorschläge (alle umgesetzt):
+- Abhängigkeit ``pyarrow`` in ``requirements.txt`` aufnehmen.
+- Fehlende Zielwerte bereits in ``prepare_data`` behandeln oder in der Pipeline bereinigen.
+- Hinweis in der Dokumentation, dass bei großen Datenmengen erheblicher Speicherbedarf entsteht.
+Alle Schritte (Feature-Erstellung aus Teilmenge, Training, Evaluation) laufen jetzt fehlerfrei durch. Die erzeugten Plots befinden sich unter ``plots/test``.
+\n-----Fedback von Agent_Victor-----
+- Default-Zielspalte in Skripten auf "Hinterlegter SiBe" angepasst, damit das Training ohne Fehler startet.
+- Evaluierung speichert jetzt Vorhersagen zus\xE4tzlich als CSV/XLSX f\xFCr eine genauere Analyse.
+- Weitere Metriken wie R\xB2 oder MAPE k\xF6nnten erg\xE4nzend berechnet werden, um das Modell umfassender zu bewerten.
+- Zus\xE4tzliche Features wie gleitende Durchschnitte oder saisonale Faktoren k\xF6nnten den Lagerverlauf besser abbilden.
+- Langfristig w\xE4re eine Hyperparameteroptimierung (z.B. GridSearch) sinnvoll, um die Modellqualit\xE4t zu steigern.
