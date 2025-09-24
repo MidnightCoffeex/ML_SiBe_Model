@@ -22,7 +22,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--targets",
-        default="LABLE_StockOut_MinAdd",
+        default="LABLE_WBZ_NegBlockSum",
         help="Comma separated target column names",
     )
     parser.add_argument("--n_estimators", type=int)
@@ -123,3 +123,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

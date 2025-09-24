@@ -121,7 +121,7 @@ sein.
 
 ### 3.6 Labels (Zielgrößen)
 
-- LABLE_StockOut_MinAdd (behalten): Schätzt die zusätzliche Menge, die
+- _LABLE_StockOut_MinAdd (behalten): Schätzt die zusätzliche Menge, die
   benötigt wäre, um innerhalb eines vorausschauenden Fensters (Lookahead)
   Stockouts zu vermeiden.
   - Lookahead ≈ 1.25 × WBZ (#Ich frage den User#: Warum genau 1.25?)
@@ -129,8 +129,7 @@ sein.
     Stockout-Zeitpunkt und „rollierender“ Defizit-Summe über das Fenster.
   - Interpretation: „Wie viel muss ich minimal addieren, um auf Sicht keine
     Unterdeckung zu haben?“
-- Entfernte experimentelle Labels: LABLE_SiBe_STD95, LABLE_SiBe_AvgMax,
-  LABLE_SiBe_Percentile. Gründe: begrenzter Zusatznutzen, teils nicht zur
+- Entfernte Labels: LABLE_SiBe_STD95, LABLE_SiBe_AvgMax, LABLE_SiBe_Percentile. _LABLE_StockOut_MinAdd bleibt als Hintergrundspalte erhalten (nicht f�rs Training). Gründe: begrenzter Zusatznutzen, teils nicht zur
   Optimierung passend (MSE vs. Quantil), Gefahr der Zielunschärfe.
 
 ---
@@ -146,7 +145,7 @@ sein.
   - Gradient Boosting (scikit-learn)
   - XGBoost (optional)
   - LightGBM (optional)
-- Gewichte: Zeilen mit LABLE_StockOut_MinAdd > 0 können höher gewichtet
+- Gewichte: Zeilen mit _LABLE_StockOut_MinAdd > 0 können höher gewichtet
   werden (#Ich frage den User#: Welche Gewichtung ist fachlich gewünscht?).
 - ALL vs. Teil-spezifisch: Ein Modell über alle Teile (ALL) erfasst Muster
   global; Teil-spezifische Modelle können individuelle Charakteristika besser
@@ -189,7 +188,7 @@ python scripts/build_features.py --input Rohdaten --output Features
 ```bash
 python scripts/train.py --data Features --part ALL \
   --model-dir Modelle --models gb \
-  --targets LABLE_StockOut_MinAdd \
+  --targets _LABLE_StockOut_MinAdd \
   --n_estimators 600 --learning_rate 0.05 --max_depth 4 --subsample 0.8
 ```
 
@@ -198,7 +197,7 @@ python scripts/train.py --data Features --part ALL \
 ```bash
 python scripts/evaluate.py --features Features --part ALL \
   --model-dir Modelle --model-type gb --model-id 1 \
-  --targets LABLE_StockOut_MinAdd --plots plots
+  --targets _LABLE_StockOut_MinAdd --plots plots
 ```
 - Bei „part=ALL“ fragt das Script intern nach der konkreten Teilnummer für die
   Auswertung.
@@ -277,3 +276,4 @@ Stand dieses Dokuments entspricht der aktuellen Pipeline-Logik mit
 zeitkorrekter Anwendung des SiBe‑Verlaufs und der Trennung von
 „nF_*“‑Spalten (nur Anzeige) und Modellfeatures.
 
+\n\n### Neues Label: LABLE_WBZ_NegBlockSum\n\n- Ziel: Im WBZ-Fenster [t, t+WBZ) alle zusammenh�ngenden negativen Bl�cke in EoD_Bestand_noSiBe betrachten.\n- F�r jeden Block wird das Minimum (st�rkste Unterdeckung) einmalig herangezogen.\n- Das Label ist die Summe der Absolutbetr�ge dieser Block-Minima innerhalb des Fensters (positiver Wert).\n- Motivation: Mehrere getrennte Engp�sse im Planhorizont sollen additiv abgesichert werden; WBZ steuert die zeitliche Reichweite der Entscheidung.\n

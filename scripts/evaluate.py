@@ -18,7 +18,7 @@ def main() -> None:
     parser.add_argument("--raw", help="Directory with raw CSV files")
     parser.add_argument(
         "--targets",
-        default="LABLE_StockOut_MinAdd",
+        default="LABLE_WBZ_NegBlockSum",
         help="Comma separated target column names",
     )
     parser.add_argument("--plots", help="Directory to store evaluation results")
@@ -80,3 +80,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

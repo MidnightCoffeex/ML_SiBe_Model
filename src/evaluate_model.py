@@ -56,10 +56,11 @@ def _evaluate_range(
     results = results.sort_values("Datum")
     pred_col = f"pred_{target}"
 
-    mae = mean_absolute_error(results["Hinterlegter SiBe"], results[pred_col])
-    rmse = np.sqrt(mean_squared_error(results["Hinterlegter SiBe"], results[pred_col]))
-    r2 = r2_score(results["Hinterlegter SiBe"], results[pred_col])
-    mape = mean_absolute_percentage_error(results["Hinterlegter SiBe"], results[pred_col])
+    actual_col = "nF_Hinterlegter SiBe" if "nF_Hinterlegter SiBe" in results.columns else "Hinterlegter SiBe"
+    mae = mean_absolute_error(results[actual_col], results[pred_col])
+    rmse = np.sqrt(mean_squared_error(results[actual_col], results[pred_col]))
+    r2 = r2_score(results[actual_col], results[pred_col])
+    mape = mean_absolute_percentage_error(results[actual_col], results[pred_col])
     print(
         f"{prefix} MAE vs Hinterlegter SiBe: {mae:.3f} | RMSE: {rmse:.3f} | R2: {r2:.3f} | MAPE: {mape:.3f}"
     )
@@ -72,7 +73,7 @@ def _evaluate_range(
         pass
 
     plt.figure()
-    sns.scatterplot(x=results["Hinterlegter SiBe"], y=results[pred_col])
+    sns.scatterplot(x=results[actual_col], y=results[pred_col])
     plt.xlabel("Actual Hinterlegter SiBe")
     plt.ylabel(f"Predicted {target}")
     plt.title("Actual vs Predicted")
@@ -81,7 +82,7 @@ def _evaluate_range(
 
     fig = px.scatter(
         results,
-        x="Hinterlegter SiBe",
+        x=actual_col,
         y=pred_col,
         labels={"Hinterlegter SiBe": "Actual Hinterlegter SiBe", pred_col: f"Predicted {target}"},
         title="Actual vs Predicted",
@@ -89,7 +90,7 @@ def _evaluate_range(
     fig.write_html(Path(output_dir) / f"{prefix}_actual_vs_pred.html")
 
     plt.figure()
-    sns.lineplot(x="Datum", y="Hinterlegter SiBe", data=results, label="Actual")
+    sns.lineplot(x="Datum", y=actual_col, data=results, label="Actual")
     sns.lineplot(x="Datum", y=pred_col, data=results, label="Predicted")
     plt.xlabel("Date")
     plt.ylabel(target)
@@ -112,7 +113,7 @@ def _evaluate_range(
     fig2.add_trace(
         go.Scatter(
             x=results["Datum"],
-            y=results["Hinterlegter SiBe"],
+            y=results[actual_col],
             mode="lines",
             name="Hinterlegter SiBe",
         ),
@@ -209,7 +210,10 @@ def run_evaluation(
     print("Test Metrics -> MAE:", mae, "RMSE:", rmse, "R2:", r2, "MAPE:", mape)
 
     # predictions for the entire feature set
-    X_full = df.drop(columns=targets + ["EoD_Bestand"], errors="ignore")
+    drop_cols = set(targets)
+    drop_cols.update(["EoD_Bestand", "Hinterlegter SiBe"]) 
+    drop_cols.update([c for c in df.columns if isinstance(c, str) and c.startswith("nF_")])
+    X_full = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
     X_full = X_full.select_dtypes(include=["number"]).fillna(0)
     full_pred = model.predict(X_full)
     results_full = df.copy()
@@ -258,7 +262,7 @@ if __name__ == "__main__":
     parser.add_argument("--model-type", help="Model type (gb,xgb,lgbm)")
     parser.add_argument(
         "--targets",
-        default="LABLE_SiBe_STD95,LABLE_SiBe_AvgMax,LABLE_SiBe_Percentile",
+        default="LABLE_WBZ_NegBlockSum",
         help="Comma separated target column names",
     )
     parser.add_argument("--plots", default="plots", help="Directory to store plots")
@@ -267,3 +271,5 @@ if __name__ == "__main__":
 
     target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
     run_evaluation(args.data, args.model, target_list, args.plots, args.raw, model_type=args.model_type)
+
+

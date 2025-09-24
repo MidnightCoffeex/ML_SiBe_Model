@@ -23,13 +23,24 @@ def load_features(path: str) -> pd.DataFrame:
 
 def prepare_data(df: pd.DataFrame, targets: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return feature matrix ``X`` and target ``y`` with rows containing NaN
-    in any target removed."""
+    in any target removed. Excludes non-feature columns such as nF_* and
+    legacy display columns from X."""
     missing = [t for t in targets if t not in df.columns]
     if missing:
         raise ValueError(f"Target column(s) {missing} not found in dataset")
     df = df.dropna(subset=targets)
     y = df[targets]
-    X = df.drop(columns=targets + ["EoD_Bestand"])  # exclude EoD_Bestand from features
+    drop_cols = set(targets)
+    # Exclude display-only and legacy columns
+    drop_cols.update([
+        "EoD_Bestand",
+        "Hinterlegter SiBe",
+        "nF_EoD_Bestand",
+        "nF_Hinterlegter SiBe",
+    ])
+    # Also exclude any other nF_* columns if present
+    drop_cols.update([c for c in df.columns if isinstance(c, str) and c.startswith("nF_")])
+    X = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
     X = X.select_dtypes(include=["number"]).fillna(0)
     return X, y
 
@@ -323,7 +334,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--targets",
-        default="LABLE_StockOut_MinAdd",
+        default="LABLE_WBZ_NegBlockSum",
         help="Comma separated target column names",
     )
     parser.add_argument("--n_estimators", type=int, default=100)
@@ -346,3 +357,4 @@ if __name__ == "__main__":
         subsample=args.subsample,
         cv_splits=args.cv_splits,
     )
+

@@ -348,34 +348,13 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         else:
             feat['Hinterlegter SiBe'] = 0
 
-        feat['EoD_Bestand_noSiBe'] = feat['EoD_Bestand'] - feat['Hinterlegter SiBe']
+        # rename display-only (no-feature) columns and compute training series
+        feat.rename(columns={'EoD_Bestand': 'nF_EoD_Bestand'}, inplace=True)
+        feat.rename(columns={'Hinterlegter SiBe': 'nF_Hinterlegter SiBe'}, inplace=True)
+        feat['EoD_Bestand_noSiBe'] = feat['nF_EoD_Bestand'] - feat['nF_Hinterlegter SiBe']
         feat['Flag_StockOut'] = (feat['EoD_Bestand_noSiBe'] <= 0).astype(int)
 
-        # Days until stock depletes when no additional supply arrives
-        # Iterate backwards while keeping track of the next stock-out date
-        next_so = pd.NaT
-        horizon = (feat['Datum'].max() - feat['Datum'].min()).days + 1
-        days_to_empty = np.empty(len(feat), dtype=float)
-        for i in range(len(feat) - 1, -1, -1):
-            current_date = feat.loc[i, 'Datum']
-            if feat.loc[i, 'Flag_StockOut'] == 1:
-                next_so = current_date
-                days_to_empty[i] = 0
-            else:
-                if pd.isna(next_so):
-                    days_to_empty[i] = horizon
-                else:
-                    days_to_empty[i] = (next_so - current_date).days
-        feat['DaysToEmpty'] = days_to_empty
-
-        # Inventory change over the last 7 days
-        prev = feat[['Datum', 'EoD_Bestand']].copy()
-        prev['Datum'] = prev['Datum'] + pd.Timedelta(days=7)
-        prev.rename(columns={'EoD_Bestand': 'EoD_Bestand_prev7'}, inplace=True)
-        feat = pd.merge(feat, prev, on='Datum', how='left')
-        feat['BestandDelta_7T'] = feat['EoD_Bestand'] - feat['EoD_Bestand_prev7']
-        feat['BestandDelta_7T'] = feat['BestandDelta_7T'].fillna(0)
-        feat.drop(columns=['EoD_Bestand_prev7'], inplace=True)
+        # (DaysToEmpty/BestandDelta_7T entfernt – nicht mehr Teil der Ausgabe)
 
         # WBZ from Teilestamm
         wbz = None
@@ -388,45 +367,54 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         lead_time = int(wbz) if wbz and wbz > 0 else 1
         window = max(1, int(np.ceil(lead_time * 1.25)))
 
-        # Progressive & Rolling Differential Prozesse for label calculation
+        # Legacy label (kept as background only, renamed)
         deficit = (-feat['EoD_Bestand_noSiBe']).clip(lower=0)
         deficit_arr = deficit.to_numpy()
-        dte = feat['DaysToEmpty'].to_numpy()
-        idx = np.arange(len(deficit_arr))
-
-        # Progressive Differential Prozess: gradual ramp-up towards stock-out
-        future_idx = np.clip(idx + dte.astype(int), 0, len(deficit_arr) - 1)
-        deficit_at_so = deficit_arr[future_idx]
-        progressive = np.where(
-            dte < window,
-            deficit_at_so * (1 - dte / window),
-            0,
-        )
-
-        # Rolling Differential Prozess: sum of deficits over the look-ahead window
+        # simple rolling sum over window as proxy (keine DaysToEmpty mehr)
         rolling = (
             pd.Series(deficit_arr[::-1])
             .rolling(window, min_periods=1)
             .sum()
             .to_numpy()[::-1]
         )
+        feat['_LABLE_StockOut_MinAdd'] = rolling
 
-        feat['LABLE_StockOut_MinAdd'] = np.maximum(progressive, rolling)
-
-        # ----- pseudo label calculation -----
-        demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
-        demand_series = demand_series.clip(lower=0).fillna(0)
-        roll_mean = demand_series.rolling(lead_time, min_periods=1).mean()
-        roll_var = demand_series.rolling(lead_time, min_periods=1).var().fillna(0)
-        roll_max = demand_series.rolling(lead_time, min_periods=1).max()
-        lt_demand = demand_series.rolling(lead_time, min_periods=1).sum()
-        lt_p90 = lt_demand.expanding().quantile(0.9)
-
-        feat['LABLE_SiBe_STD95'] = 1.65 * np.sqrt(lead_time * roll_var)
-        feat['LABLE_SiBe_AvgMax'] = roll_max - roll_mean
-        feat['LABLE_SiBe_Percentile'] = lt_p90 - roll_mean
+        # Neues Label: Summe der Block-Minima (negativ) innerhalb WBZ, als positiver Wert
+        dates = pd.to_datetime(feat['Datum']).to_numpy()
+        vals = feat['EoD_Bestand_noSiBe'].to_numpy()
+        lbl = np.zeros(len(feat), dtype=float)
+        for i in range(len(feat)):
+            start = dates[i]
+            end = start + np.timedelta64(int(lead_time), 'D')
+            mask = (dates >= start) & (dates < end)
+            y = vals[mask]
+            if y.size == 0:
+                lbl[i] = 0.0
+                continue
+            neg = y < 0
+            if not neg.any():
+                lbl[i] = 0.0
+                continue
+            # finde zusammenhängende negative Blöcke und deren Minimum
+            mins = []
+            j = 0
+            n = y.size
+            while j < n:
+                if neg[j]:
+                    k = j
+                    while k + 1 < n and neg[k + 1]:
+                        k += 1
+                    mins.append(y[j:k+1].min())
+                    j = k + 1
+                else:
+                    j += 1
+            # Summe der Absolutbeträge der Block-Minima
+            lbl[i] = float(np.sum([-m for m in mins if m < 0]))
+        feat['LABLE_WBZ_NegBlockSum'] = lbl
 
         # ----- rolling time features -----
+        demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
+        demand_series = demand_series.clip(lower=0).fillna(0)
         for fac in [1.0, 2/3, 1/2, 1/4]:
             w = max(1, int(round(lead_time * fac)))
             key = str(int(fac*100)).rjust(2, '0')
@@ -437,17 +425,13 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             [
                 'Teil',
                 'Datum',
-                'EoD_Bestand',
-                'Hinterlegter SiBe',
+                'nF_EoD_Bestand',
+                'nF_Hinterlegter SiBe',
                 'EoD_Bestand_noSiBe',
                 'Flag_StockOut',
-                'DaysToEmpty',
-                'BestandDelta_7T',
                 'WBZ_Days',
-                'LABLE_StockOut_MinAdd',
-                'LABLE_SiBe_STD95',
-                'LABLE_SiBe_AvgMax',
-                'LABLE_SiBe_Percentile',
+                '_LABLE_StockOut_MinAdd',
+                'LABLE_WBZ_NegBlockSum',
             ]
             + [
                 c
