@@ -379,38 +379,48 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         )
         feat['_LABLE_StockOut_MinAdd'] = rolling
 
-        # Neues Label: Summe der Block-Minima (negativ) innerhalb WBZ, als positiver Wert
-        dates = pd.to_datetime(feat['Datum']).to_numpy()
+        # Neues Label: größter negativer Ausschlag innerhalb WBZ-Fenster (als positiver Wert)
+        # LABLE_WBZ_BlockMinAbs = max(0, -min(EoD_Bestand_noSiBe im Fenster))
+        feat = feat.sort_values('Datum').reset_index(drop=True)
+        date_list = pd.to_datetime(feat['Datum']).tolist()
         vals = feat['EoD_Bestand_noSiBe'].to_numpy()
-        lbl = np.zeros(len(feat), dtype=float)
+        lbl_block = np.zeros(len(feat), dtype=float)
         for i in range(len(feat)):
-            start = dates[i]
-            end = start + np.timedelta64(int(lead_time), 'D')
-            mask = (dates >= start) & (dates < end)
-            y = vals[mask]
-            if y.size == 0:
-                lbl[i] = 0.0
-                continue
-            neg = y < 0
-            if not neg.any():
-                lbl[i] = 0.0
-                continue
-            # finde zusammenhängende negative Blöcke und deren Minimum
-            mins = []
-            j = 0
-            n = y.size
-            while j < n:
-                if neg[j]:
-                    k = j
-                    while k + 1 < n and neg[k + 1]:
-                        k += 1
-                    mins.append(y[j:k+1].min())
-                    j = k + 1
+            start = date_list[i]
+            end = start + pd.Timedelta(days=int(lead_time))
+            # Fenstermaske über Index, da date_list eine Liste ist
+            y_vals = []
+            for k in range(i, len(feat)):
+                if date_list[k] < end:
+                    y_vals.append(vals[k])
                 else:
-                    j += 1
-            # Summe der Absolutbeträge der Block-Minima
-            lbl[i] = float(np.sum([-m for m in mins if m < 0]))
-        feat['LABLE_WBZ_NegBlockSum'] = lbl
+                    break
+            y = np.array(y_vals, dtype=float)
+            mmin = float(np.nanmin(y)) if y.size else 0.0
+            lbl_block[i] = max(0.0, -mmin)
+        # ausblenden als Diagnose
+        feat['_LABLE_WBZ_BlockMinAbs'] = lbl_block
+
+        # Halbjahres-Regel: Fensterweise (ca. 6 Monate) denselben Wert setzen,
+        # und zwar den Höchstwert von _LABLE_WBZ_BlockMinAbs innerhalb des Fensters
+        lbl_halfyear = np.zeros(len(feat), dtype=float)
+        i = 0
+        while i < len(feat):
+            start = date_list[i]
+            # 6 Monate nach vorn; nächstes verfügbares Datum >= diesem Ziel
+            target = start + pd.DateOffset(months=6)
+            # finde j: erstes Index mit Datum >= target
+            j = i
+            while j + 1 < len(feat) and date_list[j + 1] < target:
+                j += 1
+            # falls nächstes Datum hinter target existiert, auf dieses "aufrunden"
+            if j + 1 < len(feat) and date_list[j] < target <= date_list[j + 1]:
+                j = j + 1
+            # Fenster [i..j]
+            window_max = float(np.nanmax(lbl_block[i:j + 1])) if j >= i else float(lbl_block[i])
+            lbl_halfyear[i:j + 1] = window_max
+            i = j + 1
+        feat['LABLE_HalfYear_Target'] = lbl_halfyear
 
         # ----- rolling time features -----
         demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
@@ -431,7 +441,8 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 'Flag_StockOut',
                 'WBZ_Days',
                 '_LABLE_StockOut_MinAdd',
-                'LABLE_WBZ_NegBlockSum',
+                '_LABLE_WBZ_BlockMinAbs',
+                'LABLE_HalfYear_Target',
             ]
             + [
                 c

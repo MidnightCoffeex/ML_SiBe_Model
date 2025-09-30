@@ -22,7 +22,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--targets",
-        default="LABLE_WBZ_NegBlockSum",
+        default="LABLE_HalfYear_Target",
         help="Comma separated target column names",
     )
     parser.add_argument("--n_estimators", type=int)

@@ -196,10 +196,22 @@ def run_evaluation(
 
     df = load_features(features_path)
     X, y = prepare_data(df, targets)
-    tscv = TimeSeriesSplit(n_splits=5)
-    splits = list(tscv.split(X))
-    train_idx, val_idx = splits[-2]
-    train_full_idx, test_idx = splits[-1]
+    n = len(X)
+    if n >= 7:
+        tscv = TimeSeriesSplit(n_splits=5)
+        splits = list(tscv.split(X))
+        train_idx, val_idx = splits[-2]
+        train_full_idx, test_idx = splits[-1]
+    elif n >= 4:
+        tscv = TimeSeriesSplit(n_splits=max(2, n - 2))
+        splits = list(tscv.split(X))
+        train_idx, val_idx = splits[-2]
+        train_full_idx, test_idx = splits[-1]
+    else:
+        train_idx = np.arange(max(1, n - 2))
+        val_idx = train_idx
+        train_full_idx = train_idx
+        test_idx = np.arange(max(1, n - 1), n)
     model = joblib.load(model_path)
 
     y_pred_test = model.predict(X.iloc[test_idx])

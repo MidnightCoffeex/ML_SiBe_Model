@@ -16,6 +16,66 @@ from sklearn.metrics import (
 from sklearn.inspection import permutation_importance
 
 
+def _compute_block_min_abs_label(df: pd.DataFrame, horizon_floor_days: int = 14) -> pd.Series:
+    """Compute LABLE_WBZ_BlockMinAbs on-the-fly:
+    For each date, horizon H = max(WBZ_Days, horizon_floor_days),
+    label = max(0, -min(EoD_Bestand_noSiBe) over [t, t+H)).
+    """
+    if 'EoD_Bestand_noSiBe' not in df.columns or 'Datum' not in df.columns:
+        raise ValueError("Columns 'Datum' and 'EoD_Bestand_noSiBe' are required")
+    wbz = pd.to_numeric(df.get('WBZ_Days', 0), errors='coerce').fillna(0).astype(float)
+    dates = pd.to_datetime(df['Datum'], errors='coerce')
+    vals = pd.to_numeric(df['EoD_Bestand_noSiBe'], errors='coerce').fillna(0).to_numpy()
+    H = np.maximum(wbz.to_numpy(), float(horizon_floor_days))
+    out = np.zeros(len(df), dtype=float)
+    darr = dates.to_numpy()
+    for i in range(len(df)):
+        h = int(max(1, round(H[i])))
+        start = darr[i]
+        if pd.isna(start):
+            out[i] = 0.0
+            continue
+        end = start + np.timedelta64(h, 'D')
+        mask = (darr >= start) & (darr < end)
+        y = vals[mask]
+        mmin = float(np.nanmin(y)) if y.size else 0.0
+        out[i] = max(0.0, -mmin)
+    return pd.Series(out, index=df.index, name='LABLE_WBZ_BlockMinAbs')
+
+
+def _compute_halfyear_label_from_block(df: pd.DataFrame, block_col: str = '_LABLE_WBZ_BlockMinAbs') -> pd.Series:
+    """Compute the half-year windowed constant label from a per-date block-min-abs series.
+    For each start date, pick the next date >= start+6 months as window end; set
+    the label for all rows in that window to the maximum value of the block series
+    within the window. Continue until the end of the series.
+    """
+    if 'Datum' not in df.columns:
+        raise ValueError("'Datum' column required")
+    if block_col not in df.columns:
+        raise ValueError(f"'{block_col}' column required")
+    sdf = df[['Datum', block_col]].copy()
+    sdf['Datum'] = pd.to_datetime(sdf['Datum'], errors='coerce')
+    sdf = sdf.sort_values('Datum').reset_index()
+    dates = sdf['Datum'].tolist()
+    vals = pd.to_numeric(sdf[block_col], errors='coerce').fillna(0).to_numpy()
+    out = np.zeros(len(sdf), dtype=float)
+    i = 0
+    while i < len(sdf):
+        start = dates[i]
+        target = start + pd.DateOffset(months=6)
+        j = i
+        while j + 1 < len(sdf) and dates[j + 1] < target:
+            j += 1
+        if j + 1 < len(sdf) and dates[j] < target <= dates[j + 1]:
+            j = j + 1
+        window_max = float(np.nanmax(vals[i:j + 1])) if j >= i else float(vals[i])
+        out[i:j + 1] = window_max
+        i = j + 1
+    result = pd.Series(out, index=sdf['index'])
+    result = result.reindex(df.index).fillna(method='ffill').fillna(method='bfill')
+    result.name = 'LABLE_HalfYear_Target'
+    return result
+
 def load_features(path: str) -> pd.DataFrame:
     """Load pre-computed features from a parquet file."""
     return pd.read_parquet(path)
@@ -25,6 +85,15 @@ def prepare_data(df: pd.DataFrame, targets: list[str]) -> tuple[pd.DataFrame, pd
     """Return feature matrix ``X`` and target ``y`` with rows containing NaN
     in any target removed. Excludes non-feature columns such as nF_* and
     legacy display columns from X."""
+    # ensure HalfYear label exists if requested; compute from block-min-abs
+    if 'LABLE_HalfYear_Target' in targets and 'LABLE_HalfYear_Target' not in df.columns:
+        df = df.copy()
+        # prefer using precomputed hidden block label; else compute
+        block_col = '_LABLE_WBZ_BlockMinAbs'
+        if block_col not in df.columns:
+            df['LABLE_WBZ_BlockMinAbs'] = _compute_block_min_abs_label(df)
+            block_col = 'LABLE_WBZ_BlockMinAbs'
+        df['LABLE_HalfYear_Target'] = _compute_halfyear_label_from_block(df, block_col)
     missing = [t for t in targets if t not in df.columns]
     if missing:
         raise ValueError(f"Target column(s) {missing} not found in dataset")
@@ -334,7 +403,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--targets",
-        default="LABLE_WBZ_NegBlockSum",
+        default="LABLE_HalfYear_Target",
         help="Comma separated target column names",
     )
     parser.add_argument("--n_estimators", type=int, default=100)
