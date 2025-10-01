@@ -39,26 +39,16 @@ generated. Planned receipts (``Deckungsmenge``) increase the inventory while
 planned demand (``Bedarfsmenge``) reduces it. The safety stock history
 (``SiBeVerlauf``) is joined using the last known value up to each date.
 
-Each produced feature file contains exactly these columns in the given order:
+Each produced feature file contains key columns (excerpt):
 
-- ``Teil`` – part number
-- ``Datum`` – date of the record
-- ``EoD_Bestand`` – simulated end-of-day stock including planned movements
-- ``Hinterlegter SiBe`` – safety stock active on that day
-- ``EoD_Bestand_noSiBe`` – stock minus safety stock
-- ``Flag_StockOut`` – ``1`` if ``EoD_Bestand_noSiBe`` <= 0
-- ``DaysToEmpty`` – days until stock would be depleted (0 on stock-out, large value when no stock-out is foreseen)
-- ``BestandDelta_7T`` – change in ``EoD_Bestand`` compared to seven days prior
-  - ``LABLE_StockOut_MinAdd`` – cumulative replenishment required to avoid
-    stock-outs within the next ``1.25 × WBZ`` days
-- ``WBZ_Days`` – lead time from the part master data
-- ``LABLE_SiBe_STD95`` – safety stock based on demand variance
-- ``LABLE_SiBe_AvgMax`` – safety stock as difference of max and average demand
-- ``LABLE_SiBe_Percentile`` – 90th percentile demand minus average
-  demand
-  
-Additional columns ``DemandMean_*`` and ``DemandMax_*`` hold rolling
-consumption statistics derived from ``EoD_Bestand_noSiBe``.
+- ``Teil`` / ``Datum``
+- ``F_NiU_EoD_Bestand`` (display only)
+- ``F_NiU_Hinterlegter SiBe`` (display only)
+- ``EoD_Bestand_noSiBe``, ``Flag_StockOut``, ``WBZ_Days``
+- ``L_NiU_StockOut_MinAdd`` (diagnostic)
+- ``L_NiU_WBZ_BlockMinAbs`` (diagnostic)
+- ``LABLE_HalfYear_Target`` (training target)
+- ``DemandMean_*`` / ``DemandMax_*`` (rolling consumption)
 
 The resulting table contains one row per part and date and forms the input for
 model training.
@@ -130,7 +120,7 @@ python3.11 -m pip install xgboost lightgbm
    ```
 
    - Gibt Features-Pfad, Teil, Modellverzeichnis und Zielordner für Plots an.
-   - Ergebnisse landen unter ``plots/<Teil>/<Modelltyp>/<ID>/`` und umfassen ``*_predictions.csv``/``.xlsx`` sowie PNG/HTML-Grafiken.
+   - Ergebnisse landen unter ``New_Test_Plots/<Teil|ALL>/<Modelltyp>/<ID>/`` und umfassen ``*_predictions.csv``/``.xlsx`` sowie PNG/HTML-Grafiken.
    - Die Konsole meldet erneut MAE, RMSE, R² und MAPE.
 
 ## Running the pipeline
@@ -166,7 +156,7 @@ During the interactive prompts the feature directory, part number (or ``ALL``)
 and a model identifier are requested. Hyperparameters such as
 ``n_estimators``, ``learning_rate``, ``max_depth`` and ``subsample`` can be
 entered manually or left at their defaults. Results are stored under
-``Modelle/<Teil>/<Modelltyp>/<Modellnummer>/`` containing the trained model,
+``Modelle/<Teil|ALL>/<Modelltyp>/<Modellnummer>/`` containing the trained model,
 metrics and feature importances. ``metrics.csv`` listet Kennzahlen wie MAE
 (Mean Absolute Error), RMSE, R² und MAPE, während ``feature_importances.csv``
 den Einfluss jeder Spalte auf die Vorhersage zeigt.
@@ -185,13 +175,13 @@ python3.11 scripts/evaluate.py --model-type gb --model-id 1
 ```
 
 The evaluator infers the model type from the directory layout if not provided.
-Plots and CSV exports are written to ``plots/<Teil>/<Modelltyp>/<Modellnummer>/``.
+Plots and CSV exports are written to ``New_Test_Plots/<Teil|ALL>/<Modelltyp>/<Modellnummer>/``.
 It reports MAE, RMSE, R² and MAPE on the test split and saves several graphs
 both as PNG and HTML files:
 
 - ``actual_vs_pred.png`` / ``.html`` – scatter plot of predicted versus actual values
 - ``predictions_over_time.png`` / ``.html`` – comparison of predictions and actual values by date
-- ``training_history.png`` / ``.html`` – model deviance over boosting iterations
+- ``training_history.png`` / ``.html`` � model deviance over boosting iterations
 
 ``*_predictions.csv`` und ``*_predictions.xlsx`` enthalten die berechneten
 Werte je Datum. MAE (Mean Absolute Error) misst die durchschnittliche Abweichung,
@@ -211,3 +201,11 @@ Einfluss auf die Vorhersage hat.
   feature rows.
 - Building the feature set for many dates can require several gigabytes of
   memory.  If resource limits are reached, process only a subset of the files.
+
+
+## Naming & Exclusions (NiU)
+- ``F_NiU_*``: feature/display not in use (never used as model input).
+- ``L_NiU_*``: label/diagnostic not in use (helper columns; not inputs).
+- Training target: ``LABLE_HalfYear_Target`` (semiannual constant target per window based on the max of ``L_NiU_WBZ_BlockMinAbs``).
+- Train/Eval automatically exclude any columns with ``F_NiU_``/``L_NiU_`` (and legacy ``nF_``) from the feature matrix.
+

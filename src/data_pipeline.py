@@ -349,9 +349,9 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             feat['Hinterlegter SiBe'] = 0
 
         # rename display-only (no-feature) columns and compute training series
-        feat.rename(columns={'EoD_Bestand': 'nF_EoD_Bestand'}, inplace=True)
-        feat.rename(columns={'Hinterlegter SiBe': 'nF_Hinterlegter SiBe'}, inplace=True)
-        feat['EoD_Bestand_noSiBe'] = feat['nF_EoD_Bestand'] - feat['nF_Hinterlegter SiBe']
+        feat.rename(columns={'EoD_Bestand': 'F_NiU_EoD_Bestand'}, inplace=True)
+        feat.rename(columns={'Hinterlegter SiBe': 'F_NiU_Hinterlegter SiBe'}, inplace=True)
+        feat['EoD_Bestand_noSiBe'] = feat['F_NiU_EoD_Bestand'] - feat['F_NiU_Hinterlegter SiBe']
         feat['Flag_StockOut'] = (feat['EoD_Bestand_noSiBe'] <= 0).astype(int)
 
         # (DaysToEmpty/BestandDelta_7T entfernt – nicht mehr Teil der Ausgabe)
@@ -377,7 +377,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             .sum()
             .to_numpy()[::-1]
         )
-        feat['_LABLE_StockOut_MinAdd'] = rolling
+        feat['L_NiU_StockOut_MinAdd'] = rolling
 
         # Neues Label: größter negativer Ausschlag innerhalb WBZ-Fenster (als positiver Wert)
         # LABLE_WBZ_BlockMinAbs = max(0, -min(EoD_Bestand_noSiBe im Fenster))
@@ -398,8 +398,8 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             y = np.array(y_vals, dtype=float)
             mmin = float(np.nanmin(y)) if y.size else 0.0
             lbl_block[i] = max(0.0, -mmin)
-        # ausblenden als Diagnose
-        feat['_LABLE_WBZ_BlockMinAbs'] = lbl_block
+        # ausblenden als Diagnose (Label Not-in-Use)
+        feat['L_NiU_WBZ_BlockMinAbs'] = lbl_block
 
         # Halbjahres-Regel: Fensterweise (ca. 6 Monate) denselben Wert setzen,
         # und zwar den Höchstwert von _LABLE_WBZ_BlockMinAbs innerhalb des Fensters
@@ -435,13 +435,13 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             [
                 'Teil',
                 'Datum',
-                'nF_EoD_Bestand',
-                'nF_Hinterlegter SiBe',
+                'F_NiU_EoD_Bestand',
+                'F_NiU_Hinterlegter SiBe',
                 'EoD_Bestand_noSiBe',
                 'Flag_StockOut',
                 'WBZ_Days',
-                '_LABLE_StockOut_MinAdd',
-                '_LABLE_WBZ_BlockMinAbs',
+                'L_NiU_StockOut_MinAdd',
+                'L_NiU_WBZ_BlockMinAbs',
                 'LABLE_HalfYear_Target',
             ]
             + [

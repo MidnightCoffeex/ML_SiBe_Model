@@ -1,4 +1,0 @@
-Rolling_Mean_7d_EoD: 7-Tage gleitender Durchschnitt des EoD_Bestand
-Rolling_Sum_30d_Bedarfsmenge: Summe der Bedarfsmenge der letzten 30 Tage
-Delta_Bestand: Tagesänderung des EoD_Bestand zum Vortag
-Ratio_Deckung_Bedarf: Quotient aus kumulierter Deckungsmenge und Bedarfsmenge des Tages

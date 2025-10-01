@@ -56,7 +56,11 @@ def _evaluate_range(
     results = results.sort_values("Datum")
     pred_col = f"pred_{target}"
 
-    actual_col = "nF_Hinterlegter SiBe" if "nF_Hinterlegter SiBe" in results.columns else "Hinterlegter SiBe"
+    actual_col = (
+        "F_NiU_Hinterlegter SiBe"
+        if "F_NiU_Hinterlegter SiBe" in results.columns
+        else ("nF_Hinterlegter SiBe" if "nF_Hinterlegter SiBe" in results.columns else "Hinterlegter SiBe")
+    )
     mae = mean_absolute_error(results[actual_col], results[pred_col])
     rmse = np.sqrt(mean_squared_error(results[actual_col], results[pred_col]))
     r2 = r2_score(results[actual_col], results[pred_col])
@@ -224,7 +228,7 @@ def run_evaluation(
     # predictions for the entire feature set
     drop_cols = set(targets)
     drop_cols.update(["EoD_Bestand", "Hinterlegter SiBe"]) 
-    drop_cols.update([c for c in df.columns if isinstance(c, str) and c.startswith("nF_")])
+    drop_cols.update([c for c in df.columns if isinstance(c, str) and (c.startswith("F_NiU_") or c.startswith("L_NiU_") or c.startswith("nF_"))])
     X_full = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
     X_full = X_full.select_dtypes(include=["number"]).fillna(0)
     full_pred = model.predict(X_full)

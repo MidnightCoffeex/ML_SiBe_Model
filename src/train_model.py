@@ -43,7 +43,7 @@ def _compute_block_min_abs_label(df: pd.DataFrame, horizon_floor_days: int = 14)
     return pd.Series(out, index=df.index, name='LABLE_WBZ_BlockMinAbs')
 
 
-def _compute_halfyear_label_from_block(df: pd.DataFrame, block_col: str = '_LABLE_WBZ_BlockMinAbs') -> pd.Series:
+def _compute_halfyear_label_from_block(df: pd.DataFrame, block_col: str = 'L_NiU_WBZ_BlockMinAbs') -> pd.Series:
     """Compute the half-year windowed constant label from a per-date block-min-abs series.
     For each start date, pick the next date >= start+6 months as window end; set
     the label for all rows in that window to the maximum value of the block series
@@ -89,10 +89,16 @@ def prepare_data(df: pd.DataFrame, targets: list[str]) -> tuple[pd.DataFrame, pd
     if 'LABLE_HalfYear_Target' in targets and 'LABLE_HalfYear_Target' not in df.columns:
         df = df.copy()
         # prefer using precomputed hidden block label; else compute
-        block_col = '_LABLE_WBZ_BlockMinAbs'
+        block_col = 'L_NiU_WBZ_BlockMinAbs'
         if block_col not in df.columns:
-            df['LABLE_WBZ_BlockMinAbs'] = _compute_block_min_abs_label(df)
-            block_col = 'LABLE_WBZ_BlockMinAbs'
+            # try legacy names for compatibility
+            if 'LABLE_WBZ_BlockMinAbs' in df.columns:
+                block_col = 'LABLE_WBZ_BlockMinAbs'
+            elif '_LABLE_WBZ_BlockMinAbs' in df.columns:
+                block_col = '_LABLE_WBZ_BlockMinAbs'
+            else:
+                df['LABLE_WBZ_BlockMinAbs'] = _compute_block_min_abs_label(df)
+                block_col = 'LABLE_WBZ_BlockMinAbs'
         df['LABLE_HalfYear_Target'] = _compute_halfyear_label_from_block(df, block_col)
     missing = [t for t in targets if t not in df.columns]
     if missing:
@@ -107,8 +113,8 @@ def prepare_data(df: pd.DataFrame, targets: list[str]) -> tuple[pd.DataFrame, pd
         "nF_EoD_Bestand",
         "nF_Hinterlegter SiBe",
     ])
-    # Also exclude any other nF_* columns if present
-    drop_cols.update([c for c in df.columns if isinstance(c, str) and c.startswith("nF_")])
+    # Exclude any Not-in-Use columns
+    drop_cols.update([c for c in df.columns if isinstance(c, str) and (c.startswith("F_NiU_") or c.startswith("L_NiU_") or c.startswith("nF_"))])
     X = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
     X = X.select_dtypes(include=["number"]).fillna(0)
     return X, y
@@ -213,8 +219,11 @@ def run_training_df(
     """Train a model from an already loaded DataFrame."""
     X, y = prepare_data(df, targets)
     weights = np.ones(len(y))
-    if "LABLE_StockOut_MinAdd" in y.columns:
-        weights[y["LABLE_StockOut_MinAdd"] > 0] = 5.0
+    # optional weighting by hidden label if available in df
+    if 'L_NiU_StockOut_MinAdd' in df.columns:
+        sw = np.where(pd.to_numeric(df['L_NiU_StockOut_MinAdd'], errors='coerce').fillna(0).to_numpy() > 0, 5.0, 1.0)
+        if len(sw) == len(weights):
+            weights = sw
     if len(X) < 50:
         print("Warning: very few training samples; results may be unreliable")
 
