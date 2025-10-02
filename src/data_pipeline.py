@@ -401,9 +401,17 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         # ausblenden als Diagnose (Label Not-in-Use)
         feat['L_NiU_WBZ_BlockMinAbs'] = lbl_block
 
-        # Halbjahres-Regel: Fensterweise (ca. 6 Monate) denselben Wert setzen,
-        # und zwar den Höchstwert von _LABLE_WBZ_BlockMinAbs innerhalb des Fensters
+        # Halbjahres-Regel mit Faktoren: Fensterweise (ca. 6 Monate) denselben Wert setzen,
+        # und zwar den Höchstwert von L_NiU_WBZ_BlockMinAbs innerhalb des Fensters,
+        # moduliert durch marginale Faktoren (WBZ, Frequenz, Volatilität), jeweils gecappt.
+        lbl_halfyear_base = np.zeros(len(feat), dtype=float)
         lbl_halfyear = np.zeros(len(feat), dtype=float)
+        f_wbz_arr = np.zeros(len(feat), dtype=float)
+        f_freq_arr = np.zeros(len(feat), dtype=float)
+        f_vol_arr = np.zeros(len(feat), dtype=float)
+        # Nachfrage-Ereignisse aus demand_series: Ereignis, wenn positive Nachfrage
+        demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
+        demand_series = pd.to_numeric(demand_series, errors='coerce').clip(lower=0).fillna(0).to_numpy()
         i = 0
         while i < len(feat):
             start = date_list[i]
@@ -418,8 +426,49 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 j = j + 1
             # Fenster [i..j]
             window_max = float(np.nanmax(lbl_block[i:j + 1])) if j >= i else float(lbl_block[i])
-            lbl_halfyear[i:j + 1] = window_max
+            # Faktoren berechnen (fensterweise konstant)
+            wbz_eff = float(pd.to_numeric(feat.loc[i, 'WBZ_Days'], errors='coerce')) if 'WBZ_Days' in feat.columns else 0.0
+            if not np.isfinite(wbz_eff) or wbz_eff <= 0:
+                wbz_eff = 14.0
+            wbz_eff = max(14.0, wbz_eff)
+            # f_wbz: 0..0.20 je nach WBZ-Kategorie (sanft)
+            if wbz_eff <= 28:
+                f_wbz = 0.0
+            elif wbz_eff <= 84:
+                f_wbz = 0.10 * (wbz_eff - 28.0) / (84.0 - 28.0)
+            else:
+                f_wbz = 0.20
+            # Frequenzfaktor: Ereignisse pro Fenster -> auf WBZ skaliert
+            window_days = max(1, int((date_list[j] - date_list[i]).days) + 1)
+            events_window = int(np.sum(demand_series[i:j + 1] > 0))
+            est_events_wbz = events_window * (wbz_eff / window_days)
+            f_freq = 0.20 * (np.log1p(est_events_wbz) / np.log1p(8.0))
+            f_freq = float(min(0.20, max(0.0, f_freq)))
+            # Volatilität (CV) im Fenster
+            dwin = demand_series[i:j + 1]
+            mu = float(np.nanmean(dwin)) if dwin.size else 0.0
+            sigma = float(np.nanstd(dwin)) if dwin.size else 0.0
+            cv = (sigma / mu) if mu > 1e-12 else 0.0
+            if cv <= 0.3:
+                f_vol = 0.0
+            elif cv >= 0.8:
+                f_vol = 0.20
+            else:
+                f_vol = 0.20 * (cv - 0.3) / (0.8 - 0.3)
+            total_factor = min(0.40, f_wbz + f_freq + f_vol)
+
+            base_val = window_max
+            final_val = base_val * (1.0 + total_factor)
+            lbl_halfyear_base[i:j + 1] = base_val
+            lbl_halfyear[i:j + 1] = final_val
+            f_wbz_arr[i:j + 1] = f_wbz
+            f_freq_arr[i:j + 1] = f_freq
+            f_vol_arr[i:j + 1] = f_vol
             i = j + 1
+        feat['L_NiU_HalfYear_Base'] = lbl_halfyear_base
+        feat['F_NiU_Factor_WBZ'] = f_wbz_arr
+        feat['F_NiU_Factor_Freq'] = f_freq_arr
+        feat['F_NiU_Factor_Vol'] = f_vol_arr
         feat['LABLE_HalfYear_Target'] = lbl_halfyear
 
         # ----- rolling time features -----
@@ -442,6 +491,10 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 'WBZ_Days',
                 'L_NiU_StockOut_MinAdd',
                 'L_NiU_WBZ_BlockMinAbs',
+                'L_NiU_HalfYear_Base',
+                'F_NiU_Factor_WBZ',
+                'F_NiU_Factor_Freq',
+                'F_NiU_Factor_Vol',
                 'LABLE_HalfYear_Target',
             ]
             + [

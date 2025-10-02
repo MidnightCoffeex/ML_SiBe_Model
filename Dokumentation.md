@@ -277,3 +277,34 @@ zeitkorrekter Anwendung des SiBeâ€‘Verlaufs und der Trennung von
 â€žnF_*â€œâ€‘Spalten (nur Anzeige) und Modellfeatures.
 
 \n\n### Neues Label: LABLE_WBZ_NegBlockSum\n\n- Ziel: Im WBZ-Fenster [t, t+WBZ) alle zusammenhängenden negativen Blöcke in EoD_Bestand_noSiBe betrachten.\n- Für jeden Block wird das Minimum (stärkste Unterdeckung) einmalig herangezogen.\n- Das Label ist die Summe der Absolutbeträge dieser Block-Minima innerhalb des Fensters (positiver Wert).\n- Motivation: Mehrere getrennte Engpässe im Planhorizont sollen additiv abgesichert werden; WBZ steuert die zeitliche Reichweite der Entscheidung.\n
+
+## Faktorisierung (WBZ, Bedarfe, Schwankung) – aktueller Stand
+
+In der aktuellen Umsetzung wird die halbjährliche Empfehlung (Label) in zwei Schritten gebildet:
+
+1) Basis je Halbjahr (L_NiU_HalfYear_Base):
+   - Aus dem Diagnose-Label L_NiU_WBZ_BlockMinAbs (größter negativer Ausschlag innerhalb eines WBZ-Fensters) wird pro Halbjahres-Abschnitt der maximale Wert als Basis gewählt. Das ergibt einen stabilen, konservativen Ausgangswert.
+
+2) Marginale Faktoren (fensterweise konstant, moderat gekappt):
+   - WBZ-Faktor f_wbz (längere WBZ ? etwas mehr Puffer)
+     - WBZ_eff = max(WBZ_Days, 14)
+     - f_wbz = 0.00 bei WBZ_eff = 28
+     - f_wbz steigt linear von 0.00 auf +0.10 für WBZ_eff 29–84
+     - f_wbz = +0.20 bei WBZ_eff = 85
+   - Frequenz-Faktor f_freq (häufige Entnahmen ? etwas mehr Puffer)
+     - Nachfragefolge: demand_t = max(0, EoD_noSiBe_{t-1} - EoD_noSiBe_t)
+     - Ereignisse im Fenster: events_window = Anzahl(demand_t > 0)
+     - Fensterlänge: window_days (Tage zwischen Fensterbeginn und -ende)
+     - Auf WBZ skaliert: est_events_wbz = events_window × (WBZ_eff / window_days)
+     - f_freq = 0.20 × log1p(est_events_wbz) / log1p(8), mit Kappung auf [0.00, 0.20]
+   - Volatilitäts-Faktor f_vol (unruhige Entnahmemengen ? etwas mehr Puffer)
+     - Im Fenster: Mittelwert µ und Standardabweichung s der Nachfrage; CV = s/µ (falls µ > 0)
+     - f_vol = 0.00 bei CV = 0.3
+     - f_vol steigt linear bis +0.20 bei CV = 0.8 (Kappung auf 0.20)
+   - Gesamtkappe: f_total = min(0.40, f_wbz + f_freq + f_vol)
+   - Finale Empfehlung je Halbjahr: LABLE_HalfYear_Target = L_NiU_HalfYear_Base × (1 + f_total)
+
+Weshalb so?
+- Stabilität: Ein Wert pro Halbjahr, keine sprunghaften Tagesänderungen.
+- Nachvollziehbarkeit: Die drei Faktoren sind klein, klar begründet und gekappt (max. +40% in Summe), damit die Basis nicht übersteuert wird.
+- Transparenz: Die berechneten Faktoren und die Basis werden als NiU-Spalten gespeichert (F_NiU_Factor_WBZ, F_NiU_Factor_Freq, F_NiU_Factor_Vol, L_NiU_HalfYear_Base) und nicht fürs Training genutzt.
