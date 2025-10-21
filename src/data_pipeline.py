@@ -532,6 +532,95 @@ def save_feature_folders_split(
             hist_df = df.copy()
             dispo_df = df.iloc[0:0].copy()
 
+        # Recompute forward-looking labels inside historical subset only,
+        # so that no Test_Set future bleeds into training labels.
+        if not hist_df.empty:
+            hist_df = hist_df.sort_values('Datum').reset_index(drop=True)
+            date_list = pd.to_datetime(hist_df['Datum']).tolist()
+            vals = pd.to_numeric(hist_df['EoD_Bestand_noSiBe'], errors='coerce').fillna(0).to_numpy()
+            # BlockMinAbs per row (WBZ-days window; restrict to hist end)
+            lbl_block = np.zeros(len(hist_df), dtype=float)
+            for ii in range(len(hist_df)):
+                start = date_list[ii]
+                # WBZ pro Zeile (fallback 14→1 Tag für BlockMinAbs wie zuvor minimal 1)
+                wbz_row = pd.to_numeric(hist_df.loc[ii, 'WBZ_Days'], errors='coerce') if 'WBZ_Days' in hist_df.columns else np.nan
+                lead_days = int(wbz_row) if pd.notna(wbz_row) and wbz_row > 0 else 1
+                end = start + pd.Timedelta(days=lead_days)
+                # Collect values until end (or hist end)
+                y_vals = []
+                for kk in range(ii, len(hist_df)):
+                    if date_list[kk] < end:
+                        y_vals.append(vals[kk])
+                    else:
+                        break
+                y = np.array(y_vals, dtype=float)
+                mmin = float(np.nanmin(y)) if y.size else 0.0
+                lbl_block[ii] = max(0.0, -mmin)
+            hist_df['L_NiU_WBZ_BlockMinAbs'] = lbl_block
+
+            # Half-year window with factors (within hist only)
+            lbl_halfyear_base = np.zeros(len(hist_df), dtype=float)
+            lbl_halfyear = np.zeros(len(hist_df), dtype=float)
+            f_wbz_arr = np.zeros(len(hist_df), dtype=float)
+            f_freq_arr = np.zeros(len(hist_df), dtype=float)
+            f_vol_arr = np.zeros(len(hist_df), dtype=float)
+            demand_series = (
+                hist_df['EoD_Bestand_noSiBe'].shift(1) - hist_df['EoD_Bestand_noSiBe']
+            )
+            demand_series = pd.to_numeric(demand_series, errors='coerce').clip(lower=0).fillna(0).to_numpy()
+            ii = 0
+            while ii < len(hist_df):
+                start = date_list[ii]
+                target = start + pd.DateOffset(months=6)
+                jj = ii
+                while jj + 1 < len(hist_df) and date_list[jj + 1] < target:
+                    jj += 1
+                if jj + 1 < len(hist_df) and date_list[jj] < target <= date_list[jj + 1]:
+                    jj = jj + 1
+                window_max = float(np.nanmax(lbl_block[ii:jj + 1])) if jj >= ii else float(lbl_block[ii])
+                wbz_eff = float(pd.to_numeric(hist_df.loc[ii, 'WBZ_Days'], errors='coerce')) if 'WBZ_Days' in hist_df.columns else 0.0
+                if not np.isfinite(wbz_eff) or wbz_eff <= 0:
+                    wbz_eff = 14.0
+                wbz_eff = max(14.0, wbz_eff)
+                # f_wbz
+                if wbz_eff <= 28:
+                    f_wbz = 0.0
+                elif wbz_eff <= 84:
+                    f_wbz = 0.10 * (wbz_eff - 28.0) / (84.0 - 28.0)
+                else:
+                    f_wbz = 0.20
+                # f_freq (events per window scaled by WBZ)
+                window_days = max(1, int((date_list[jj] - date_list[ii]).days) + 1)
+                events_window = int(np.sum(demand_series[ii:jj + 1] > 0))
+                est_events_wbz = events_window * (wbz_eff / window_days)
+                f_freq = 0.20 * (np.log1p(est_events_wbz) / np.log1p(8.0))
+                f_freq = float(min(0.20, max(0.0, f_freq)))
+                # f_vol (CV in window)
+                dwin = demand_series[ii:jj + 1]
+                mu = float(np.nanmean(dwin)) if dwin.size else 0.0
+                sigma = float(np.nanstd(dwin)) if dwin.size else 0.0
+                cv = (sigma / mu) if mu > 1e-12 else 0.0
+                if cv <= 0.3:
+                    f_vol = 0.0
+                elif cv >= 0.8:
+                    f_vol = 0.20
+                else:
+                    f_vol = 0.20 * (cv - 0.3) / (0.8 - 0.3)
+                total_factor = min(0.40, f_wbz + f_freq + f_vol)
+                base_val = window_max
+                final_val = base_val * (1.0 + total_factor)
+                lbl_halfyear_base[ii:jj + 1] = base_val
+                lbl_halfyear[ii:jj + 1] = final_val
+                f_wbz_arr[ii:jj + 1] = f_wbz
+                f_freq_arr[ii:jj + 1] = f_freq
+                f_vol_arr[ii:jj + 1] = f_vol
+                ii = jj + 1
+            hist_df['L_NiU_HalfYear_Base'] = lbl_halfyear_base
+            hist_df['F_NiU_Factor_WBZ'] = f_wbz_arr
+            hist_df['F_NiU_Factor_Freq'] = f_freq_arr
+            hist_df['F_NiU_Factor_Vol'] = f_vol_arr
+            hist_df['LABLE_HalfYear_Target'] = lbl_halfyear
+
         # write historical subset
         part_dir = out_feat / str(part)
         part_dir.mkdir(parents=True, exist_ok=True)

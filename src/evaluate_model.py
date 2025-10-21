@@ -61,6 +61,17 @@ def _evaluate_range(
         if "F_NiU_Hinterlegter SiBe" in results.columns
         else ("nF_Hinterlegter SiBe" if "nF_Hinterlegter SiBe" in results.columns else "Hinterlegter SiBe")
     )
+    # Friendly naming and heading (Teil/WBZ)
+    name_pred = "KI: Vorgeschlagener SiBe"
+    name_eod = "Gesamtbestand ohne SiBe"
+    name_actual_sibe = "Aktueller hinterlegter SiBe"
+    name_combined = "Gesamtbestand ohne SiBe + Vorgeschlagener SiBe"
+    name_peak = "Spitzenlinie Vorschlag"
+    name_peak_combined = "Spitzenlinie + Gesamtbestand ohne SiBe"
+    part_txt = str(results.get("Teil").iloc[0]) if "Teil" in results.columns and not results.empty else ""
+    wbz_val = results.get("WBZ_Days").iloc[0] if "WBZ_Days" in results.columns and not results.empty else None
+    wbz_txt = f" – WBZ: {int(wbz_val)} Tage" if isinstance(wbz_val, (int, float)) and pd.notna(wbz_val) else ""
+    heading = f"Teil {part_txt}{wbz_txt}" if part_txt else (f"WBZ{wbz_txt}" if wbz_txt else "")
     mae = mean_absolute_error(results[actual_col], results[pred_col])
     rmse = np.sqrt(mean_squared_error(results[actual_col], results[pred_col]))
     r2 = r2_score(results[actual_col], results[pred_col])
@@ -78,9 +89,9 @@ def _evaluate_range(
 
     plt.figure()
     sns.scatterplot(x=results[actual_col], y=results[pred_col])
-    plt.xlabel("Actual Hinterlegter SiBe")
-    plt.ylabel(f"Predicted {target}")
-    plt.title("Actual vs Predicted")
+    plt.xlabel(name_actual_sibe)
+    plt.ylabel(name_pred)
+    plt.title(f"{heading}\nAktueller SiBe vs. Vorschlag" if heading else "Aktueller SiBe vs. Vorschlag")
     plt.tight_layout()
     plt.savefig(Path(output_dir) / f"{prefix}_actual_vs_pred.png")
 
@@ -88,8 +99,8 @@ def _evaluate_range(
         results,
         x=actual_col,
         y=pred_col,
-        labels={"Hinterlegter SiBe": "Actual Hinterlegter SiBe", pred_col: f"Predicted {target}"},
-        title="Actual vs Predicted",
+        labels={actual_col: name_actual_sibe, pred_col: name_pred},
+        title=f"{heading} – Aktueller SiBe vs. Vorschlag" if heading else "Aktueller SiBe vs. Vorschlag",
     )
     fig.write_html(Path(output_dir) / f"{prefix}_actual_vs_pred.html")
 
@@ -103,15 +114,25 @@ def _evaluate_range(
     plt.tight_layout()
     plt.savefig(Path(output_dir) / f"{prefix}_predictions_over_time.png")
 
+    # Prepare an upper-envelope (peak) curve of the clamped predictions
+    pred_col = f"pred_{target}"
+    results["pred_peak_curve"] = (
+        results[pred_col]
+        .rolling(window=14, min_periods=1)
+        .max()
+    )
+
     fig2 = make_subplots(
-        rows=3,
+        rows=5,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.1,
         subplot_titles=(
-            "Predictions Over Time",
-            "EoD_Bestand_noSiBe",
-            f"EoD_Bestand_noSiBe + Predicted {target}",
+            "Vorschlag über die Zeit",
+            name_eod,
+            name_combined,
+            name_peak,
+            name_peak_combined,
         ),
     )
     fig2.add_trace(
@@ -119,7 +140,7 @@ def _evaluate_range(
             x=results["Datum"],
             y=results[actual_col],
             mode="lines",
-            name="Hinterlegter SiBe",
+            name=name_actual_sibe,
         ),
         row=1,
         col=1,
@@ -129,7 +150,7 @@ def _evaluate_range(
             x=results["Datum"],
             y=results[pred_col],
             mode="lines",
-            name=f"Predicted {target}",
+            name=name_pred,
         ),
         row=1,
         col=1,
@@ -139,7 +160,7 @@ def _evaluate_range(
             x=results["Datum"],
             y=results["EoD_Bestand_noSiBe"],
             mode="lines",
-            name="EoD_Bestand_noSiBe",
+            name=name_eod,
         ),
         row=2,
         col=1,
@@ -154,7 +175,7 @@ def _evaluate_range(
             x=results["Datum"],
             y=combined_pos,
             mode="lines",
-            name="EoD_Bestand_noSiBe + Predicted",
+            name=name_combined,
             line=dict(color="blue"),
         ),
         row=3,
@@ -172,13 +193,44 @@ def _evaluate_range(
         col=1,
     )
 
-    fig2.update_layout(hovermode="x unified")
-    fig2.update_yaxes(title_text=target, row=1, col=1)
-    fig2.update_yaxes(title_text="EoD_Bestand_noSiBe", row=2, col=1)
-    fig2.update_yaxes(
-        title_text=f"EoD_Bestand_noSiBe + Predicted {target}", row=3, col=1
+    # Row 4: peak curve of predictions
+    fig2.add_trace(
+        go.Scatter(
+            x=results["Datum"],
+            y=results["pred_peak_curve"],
+            mode="lines",
+            name=name_peak,
+            line=dict(color="purple"),
+        ),
+        row=4,
+        col=1,
     )
-    fig2.update_xaxes(title_text="Datum", row=3, col=1)
+
+    # Row 5: peak curve + EoD_Bestand_noSiBe
+    combined2 = results["EoD_Bestand_noSiBe"] + results["pred_peak_curve"]
+    fig2.add_trace(
+        go.Scatter(
+            x=results["Datum"],
+            y=combined2,
+            mode="lines",
+            name="Peak Curve + EoD_Bestand_noSiBe",
+            line=dict(color="darkgreen"),
+        ),
+        row=5,
+        col=1,
+    )
+
+    fig2.update_layout(
+        hovermode="x unified",
+        height=1800,
+        title_text=(f"{heading} – Zeitverlauf" if heading else "Zeitverlauf"),
+    )
+    fig2.update_yaxes(title_text=name_pred, row=1, col=1)
+    fig2.update_yaxes(title_text=name_eod, row=2, col=1)
+    fig2.update_yaxes(title_text=name_combined, row=3, col=1)
+    fig2.update_yaxes(title_text=name_peak, row=4, col=1)
+    fig2.update_yaxes(title_text=name_peak_combined, row=5, col=1)
+    fig2.update_xaxes(title_text="Datum", row=5, col=1)
     fig2.write_html(Path(output_dir) / f"{prefix}_predictions_over_time.html")
 
 
@@ -219,6 +271,8 @@ def run_evaluation(
     model = joblib.load(model_path)
 
     y_pred_test = model.predict(X.iloc[test_idx])
+    # Clamp negative predictions to 0
+    y_pred_test = np.clip(y_pred_test, 0, None)
     mae = mean_absolute_error(y.iloc[test_idx], y_pred_test, multioutput="raw_values")
     rmse = np.sqrt(mean_squared_error(y.iloc[test_idx], y_pred_test, multioutput="raw_values"))
     r2 = r2_score(y.iloc[test_idx], y_pred_test, multioutput="raw_values")
@@ -232,6 +286,8 @@ def run_evaluation(
     X_full = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
     X_full = X_full.select_dtypes(include=["number"]).fillna(0)
     full_pred = model.predict(X_full)
+    # Clamp negative predictions to 0
+    full_pred = np.clip(full_pred, 0, None)
     results_full = df.copy()
     for i, col in enumerate(targets):
         results_full[f"pred_{col}"] = full_pred[:, i]
