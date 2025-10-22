@@ -108,6 +108,11 @@ def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[st
                 src = colmap.get(k)
                 if src in df.columns and src not in keep_cols:
                     keep_cols.append(src)
+            # If an 'alter sibe' like column exists but was not mapped, include it
+            for c in df.columns:
+                lcs = str(c).lower()
+                if 'alter' in lcs and 'sibe' in lcs and c not in keep_cols:
+                    keep_cols.append(c)
             if 'Teil' not in keep_cols and 'Teil' in df.columns:
                 keep_cols.append('Teil')
         else:
@@ -226,11 +231,22 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 df_s.rename(columns={dchange: 'AudEreignis-ZeitPkt'}, inplace=True)
             if 'aktiver SiBe' in df_s.columns and 'Im Sytem hinterlgeter SiBe' not in df_s.columns:
                 df_s.rename(columns={'aktiver SiBe': 'Im Sytem hinterlgeter SiBe'}, inplace=True)
+            # Normalize any variant of 'alter SiBe' to a canonical 'Alter_SiBe'
+            if 'Alter_SiBe' not in df_s.columns:
+                for c in list(df_s.columns):
+                    lcs = str(c).lower()
+                    if 'alter' in lcs and 'sibe' in lcs:
+                        df_s.rename(columns={c: 'Alter_SiBe'}, inplace=True)
+                        break
             # ensure Teil exists; if not, try to derive from Primärschlüssel text
             if 'Teil' not in df_s.columns and 'Primärschlüssel' in df_s.columns:
                 part = df_s['Primärschlüssel'].astype(str).str.extract(r'Teil\s+(\d+)')[0]
                 df_s['Teil'] = part
-            agg_tables[name] = _aggregate_dataset(df_s, ['AudEreignis-ZeitPkt'], last_cols=['Im Sytem hinterlgeter SiBe'])
+            agg_tables[name] = _aggregate_dataset(
+                df_s,
+                ['AudEreignis-ZeitPkt'],
+                last_cols=['Im Sytem hinterlgeter SiBe', 'Alter_SiBe'],
+            )
         elif name in {'Bestand', 'Teilestamm'}:
             df = df.copy()
             df['Datum'] = df['ExportDatum']
@@ -330,7 +346,11 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         # safety stock history: apply latest change as of each feature date (backward asof),
         # before the first change -> 0, after last change -> last value
         if 'SiBeVerlauf' in data:
-            sibe = data['SiBeVerlauf'][['Datum', 'Im Sytem hinterlgeter SiBe']].copy()
+            # include optional previous SiBe if provided (e.g. 'alter SiBE')
+            use_cols = ['Datum', 'Im Sytem hinterlgeter SiBe']
+            if 'Alter_SiBe' in data['SiBeVerlauf'].columns:
+                use_cols.append('Alter_SiBe')
+            sibe = data['SiBeVerlauf'][use_cols].copy()
             sibe['Datum'] = pd.to_datetime(sibe['Datum'], errors='coerce').dt.floor('D')
             sibe = sibe.dropna(subset=['Datum'])
             sibe = sibe.sort_values('Datum')
@@ -343,6 +363,31 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             merged['Im Sytem hinterlgeter SiBe'] = pd.to_numeric(
                 merged['Im Sytem hinterlgeter SiBe'], errors='coerce'
             ).fillna(0)
+            # Backfill: For all dates strictly before the first change, and not earlier
+            # than the earliest Lagerbew date for this part, use the earliest Alter_SiBe.
+            # This leaves the first change date and all future dates to follow the active SiBe.
+            if 'Alter_SiBe' in sibe.columns:
+                try:
+                    first_change = sibe['Datum'].min()
+                    alter_val = pd.to_numeric(
+                        sibe.loc[sibe['Datum'] == first_change, 'Alter_SiBe'], errors='coerce'
+                    ).iloc[0]
+                except Exception:
+                    first_change = None
+                    alter_val = None
+                if first_change is not None and pd.notna(alter_val):
+                    # determine earliest Lagerbew date available for this part
+                    min_lb = None
+                    if 'Lagerbew' in data and not data['Lagerbew'].empty:
+                        try:
+                            min_lb = pd.to_datetime(data['Lagerbew']['Datum']).min()
+                        except Exception:
+                            min_lb = None
+                    if min_lb is None:
+                        # fallback: earliest date in the feature frame
+                        min_lb = pd.to_datetime(feat['Datum']).min()
+                    mask_range = (merged['Datum'] < first_change) & (merged['Datum'] >= min_lb)
+                    merged.loc[mask_range, 'Im Sytem hinterlgeter SiBe'] = float(alter_val)
             feat = merged
             feat.rename(columns={'Im Sytem hinterlgeter SiBe': 'Hinterlegter SiBe'}, inplace=True)
         else:

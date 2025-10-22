@@ -253,6 +253,10 @@ def run_evaluation(
     df = load_features(features_path)
     X, y = prepare_data(df, targets)
     n = len(X)
+    # Not enough samples to evaluate robustly -> skip gracefully
+    if n < 3:
+        print(f"Skip evaluation ({prefix if 'prefix' in locals() else 'ALL'}): not enough samples (n={n}).")
+        return
     if n >= 7:
         tscv = TimeSeriesSplit(n_splits=5)
         splits = list(tscv.split(X))
@@ -268,6 +272,11 @@ def run_evaluation(
         val_idx = train_idx
         train_full_idx = train_idx
         test_idx = np.arange(max(1, n - 1), n)
+
+    # If no test samples available, skip to avoid metric errors
+    if test_idx.size == 0 or train_full_idx.size == 0:
+        print(f"Skip evaluation ({prefix if 'prefix' in locals() else 'ALL'}): insufficient split sizes (n={n}).")
+        return
     model = joblib.load(model_path)
 
     y_pred_test = model.predict(X.iloc[test_idx])
