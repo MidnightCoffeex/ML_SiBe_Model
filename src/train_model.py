@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 from pathlib import Path
 
 import joblib
@@ -215,15 +215,31 @@ def run_training_df(
     cv_splits: int | None = None,
     model_type: str = "gb",
     split_indices: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None,
+    weight_scheme: str = "blockmin",
+    weight_factor: float = 5.0,
 ) -> tuple[list[float], list[float]]:
     """Train a model from an already loaded DataFrame."""
     X, y = prepare_data(df, targets)
-    weights = np.ones(len(y))
-    # optional weighting by hidden label if available in df
-    if 'L_NiU_StockOut_MinAdd' in df.columns:
-        sw = np.where(pd.to_numeric(df['L_NiU_StockOut_MinAdd'], errors='coerce').fillna(0).to_numpy() > 0, 5.0, 1.0)
-        if len(sw) == len(weights):
-            weights = sw
+    # Default: alle Gewichte = 1
+    weights = np.ones(len(y), dtype=float)
+    # Optionale Gewichtung: Zeilen mit L_NiU_StockOut_MinAdd > 0 hÃ¶her gewichten
+    # Wichtig: auf dieselben Zeilen indizieren wie X/y (Index beibehalten)
+    if weight_scheme:
+        scheme = (weight_scheme or "none").strip().lower()
+        if scheme == 'blockmin' and 'L_NiU_StockOut_MinAdd' in df.columns:
+            sw = pd.to_numeric(df['L_NiU_StockOut_MinAdd'], errors='coerce').fillna(0)
+            try:
+                sw = sw.loc[y.index]
+                weights = np.where(sw.to_numpy() > 0, float(weight_factor), 1.0)
+            except Exception:
+                weights = np.ones(len(y), dtype=float)
+        elif scheme == 'flag' and 'Flag_StockOut' in df.columns:
+            fl = pd.to_numeric(df['Flag_StockOut'], errors='coerce').fillna(0)
+            try:
+                fl = fl.loc[y.index]
+                weights = np.where(fl.to_numpy() == 1, float(weight_factor), 1.0)
+            except Exception:
+                weights = np.ones(len(y), dtype=float)
     if len(X) < 50:
         print("Warning: very few training samples; results may be unreliable")
 
@@ -375,6 +391,8 @@ def run_training(
     max_depth: int = 3,
     subsample: float = 1.0,
     cv_splits: int | None = None,
+    weight_scheme: str = "blockmin",
+    weight_factor: float = 5.0,
 ) -> None:
     df = load_features(features_path)
     X, _ = prepare_data(df, targets)
@@ -395,6 +413,8 @@ def run_training(
             cv_splits=cv_splits,
             model_type=mtype,
             split_indices=split_indices,
+            weight_scheme=weight_scheme,
+            weight_factor=weight_factor,
         )
 
 
@@ -420,6 +440,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_depth", type=int, default=3)
     parser.add_argument("--subsample", type=float, default=1.0)
     parser.add_argument("--cv_splits", type=int, default=None)
+    parser.add_argument("--weight_scheme", default="blockmin", help="Weighting: none|blockmin|flag")
+    parser.add_argument("--weight_factor", type=float, default=5.0, help="Weight factor for selected scheme")
     args = parser.parse_args()
     target_list = [t.strip() for t in args.targets.split(",") if t.strip()]
     model_types = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -434,5 +456,7 @@ if __name__ == "__main__":
         max_depth=args.max_depth,
         subsample=args.subsample,
         cv_splits=args.cv_splits,
+        weight_scheme=args.weight_scheme,
+        weight_factor=args.weight_factor,
     )
 

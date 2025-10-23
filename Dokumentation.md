@@ -308,3 +308,17 @@ Weshalb so?
 - Stabilit�t: Ein Wert pro Halbjahr, keine sprunghaften Tages�nderungen.
 - Nachvollziehbarkeit: Die drei Faktoren sind klein, klar begr�ndet und gekappt (max. +40% in Summe), damit die Basis nicht �bersteuert wird.
 - Transparenz: Die berechneten Faktoren und die Basis werden als NiU-Spalten gespeichert (F_NiU_Factor_WBZ, F_NiU_Factor_Freq, F_NiU_Factor_Vol, L_NiU_HalfYear_Base) und nicht f�rs Training genutzt.
+
+---
+
+## Nachtrag (Okt 2025)
+
+- SiBeVerlauf-Backfill: Vor der ersten Änderung wird für alle Tage strikt vor dem ersten Änderungsdatum – jedoch nicht älter als das früheste Lagerbew-Datum des Teils – der früheste Wert aus der Spalte "Alter_SiBe" verwendet. Ab dem ersten Änderungstag gilt wieder der aktive SiBe aus dem Verlauf.
+- ALL-Training: Alle Teile werden global zusammengeführt und nach Datum (und Teil) sortiert. Splits erfolgen an Tagesgrenzen (unique days), damit keine Zeilen desselben Tages in verschiedene Folds fallen.
+- Gewichtungen: Interaktiv wählbar in `scripts/train.py` (oder per `--weight_scheme/--weight_factor`).
+  - `none`: keine Gewichtung (1.0)
+  - `blockmin` (Standard): Zeilen mit `L_NiU_StockOut_MinAdd > 0` erhalten höheres Gewicht (z. B. 5.0)
+  - `flag`: Zeilen mit `Flag_StockOut == 1` erhalten höheres Gewicht
+- Evaluation: Im ersten Zeitreihen-Plot ist das tatsächliche Label (z. B. `LABLE_HalfYear_Target`) zusätzlich als mittel-hellgraue Linie zu sehen. Plot-Erzeugung nutzt ein nicht-interaktives Backend (Matplotlib Agg) und schließt Figuren, um Speicherfehler ("fail to allocate bitmap") zu vermeiden.
+- Neues Tool: `scripts/feature_toggle_gui.py` – GUI zum globalen (De)aktivieren von Spalten per Checkbox. Abgewählte Spalten werden zu `nF_<Name>` umbenannt (wirkt auf Parquet + Excel in allen Teil-Unterordnern).
+- Timeseries-Scope: wahlweise global (ein Modell über alle Teile) oder lokal (separates Modell je Teil, Reihenfolge nach Datum pro Teil). Auswahl interaktiv in scripts/train.py.

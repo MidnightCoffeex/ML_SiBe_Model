@@ -27,3 +27,12 @@ Hinweis: Zeiten sind ca.-Angaben, wenn nicht explizit bekannt. Ältere Punkte gg
 ## Datum & Uhrzeit unbekannt
 - Initiale Pipeline erstellt (CSV‑Parsing, Spaltenmapping via `Spaltenbedeutung.xlsx`, Zeitreihenaggregation, Anzeige‑Spalten), Skripte `build_features.py`, `train.py`, `evaluate.py` angelegt.
 - Legacy‑Labels (z. B. `_LABLE_StockOut_MinAdd`) als Diagnose hinzugefügt; Rolling‑Features (`DemandMean_*`, `DemandMax_*`).
+
+## 2025-10-23 10:36
+- Doku ergänzt (Backfill mit Alter_SiBe; ALL-Training global sortiert; Tagesgrenzen-Splits; Gewichtungen per Schema/Faktor; Evaluation mit Label-Overlay; Plot-Stabilisierung; Feature-Toggle-GUI).
+- Training interaktiv erweitert: --weight_scheme (none|blockmin|flag), --weight_factor.
+- Evaluate stabilisiert (Matplotlib Agg, Figure-Close), Label-Overlay hinzugefügt.
+- SiBe-Backfill korrigiert: Alter_SiBe rückwärts bis frühestes Lagerbew-Datum, strikt vor erstem Änderungsdatum.
+
+## 2025-10-23 10:48
+- Train: Timeseries-Scope interaktiv (global|local). Lokal = pro Teil separat, global = ein Modell über alle Teile. ID-Handling: vorhandene ID wird übernommen, sonst auto pro Zielordner. Gewichtungs-Prompts abgesichert.

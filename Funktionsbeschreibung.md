@@ -129,3 +129,14 @@ Ja, aber sinnvoll ist oft: bestehendes Modell als Ausgang nehmen, mit maßvollen
 ## Das Wichtigste in einem Satz
 Wir verwandeln Rohdaten in einen sauberen Tagesverlauf je Teil, bauen einfache, sinnvolle Kennzahlen und ein stabiles, halbjährliches Ziel – und lassen ein bewährtes Lernverfahren aus den Mustern der Vergangenheit eine nachvollziehbare Sicherheitsbestand‑Empfehlung ableiten.
 
+
+---
+
+## Nachtrag (Okt 2025)
+
+- Vor erster Änderung im SiBe: Wir nehmen den ältesten "Alter_SiBe"-Wert aus der Historie und tragen ihn rückwärts bis zum frühesten Lagerbew-Datum ein (für Tage < erstem Änderungsdatum). Ab der ersten Änderung gilt wieder der aktive SiBe.
+- ALL-Training: Alle Teile gemeinsam, global nach Datum (und Teil) sortiert. Zeit-Splits an Tagesgrenzen, damit nicht derselbe Kalendertag gleichzeitig in Training und Test liegt.
+- Gewichte: Standard ist `blockmin` (Tage mit `L_NiU_StockOut_MinAdd > 0` zählen stärker, z. B. Faktor 5). Alternativ `flag` (bei `Flag_StockOut == 1`) oder `none` (keine Gewichtung). Einstellung beim Start des Trainings (Fragen im Terminal) oder per Argumenten.
+- Auswertung: Das Ziel (z. B. `LABLE_HalfYear_Target`) wird im ersten Plot als graue Linie angezeigt.
+- Spalten schnell an-/ausschalten: `scripts/feature_toggle_gui.py` bietet Checkboxen; abgewählte Spalten werden mit Prefix `nF_` versehen und so vom Training ignoriert.
+- Timeseries-Scope: Du kannst wählen: „global“ (alle Teile zusammen, ein Modell) oder „lokal“ (jedes Teil bekommt sein eigenes Modell; wir gehen Teil für Teil den Zeitverlauf entlang). Die Abfrage kommt beim Start von scripts/train.py.

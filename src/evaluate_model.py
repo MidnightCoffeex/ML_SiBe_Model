@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Tuple
 
 import joblib
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
@@ -94,6 +96,7 @@ def _evaluate_range(
     plt.title(f"{heading}\nAktueller SiBe vs. Vorschlag" if heading else "Aktueller SiBe vs. Vorschlag")
     plt.tight_layout()
     plt.savefig(Path(output_dir) / f"{prefix}_actual_vs_pred.png")
+    plt.close()
 
     fig = px.scatter(
         results,
@@ -113,6 +116,7 @@ def _evaluate_range(
     plt.xticks(rotation=45)
     plt.tight_layout()
     plt.savefig(Path(output_dir) / f"{prefix}_predictions_over_time.png")
+    plt.close()
 
     # Prepare an upper-envelope (peak) curve of the clamped predictions
     pred_col = f"pred_{target}"
@@ -145,6 +149,23 @@ def _evaluate_range(
         row=1,
         col=1,
     )
+    # Overlay the actual training label as a medium-light gray line (if present)
+    if target in results.columns:
+        try:
+            lab_series = pd.to_numeric(results[target], errors="coerce")
+        except Exception:
+            lab_series = results[target]
+        fig2.add_trace(
+            go.Scatter(
+                x=results["Datum"],
+                y=lab_series,
+                mode="lines",
+                name=f"Label: {target}",
+                line=dict(color="#B0B0B0"),
+            ),
+            row=1,
+            col=1,
+        )
     fig2.add_trace(
         go.Scatter(
             x=results["Datum"],
@@ -232,6 +253,9 @@ def _evaluate_range(
     fig2.update_yaxes(title_text=name_peak_combined, row=5, col=1)
     fig2.update_xaxes(title_text="Datum", row=5, col=1)
     fig2.write_html(Path(output_dir) / f"{prefix}_predictions_over_time.html")
+    
+    # help GC
+    del fig2
 
 
 def run_evaluation(
@@ -322,6 +346,7 @@ def run_evaluation(
         plt.title("Training History")
         plt.tight_layout()
         plt.savefig(Path(output_dir) / "training_history.png")
+        plt.close()
 
         fig_hist = px.line(
             x=list(range(1, len(model.train_score_) + 1)),
