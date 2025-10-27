@@ -77,11 +77,21 @@ def _compute_halfyear_label_from_block(df: pd.DataFrame, block_col: str = 'L_NiU
     return result
 
 def load_features(path: str) -> pd.DataFrame:
-    """Load pre-computed features from a parquet file."""
-    return pd.read_parquet(path)
+    """Load pre-computed features from a parquet file, with CSV fallback."""
+    p = Path(path)
+    try:
+        return pd.read_parquet(p, engine="pyarrow")
+    except Exception:
+        try:
+            return pd.read_parquet(p)
+        except Exception:
+            csv = p.with_suffix('.csv')
+            if csv.exists():
+                return pd.read_csv(csv)
+            raise
 
 
-def prepare_data(df: pd.DataFrame, targets: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+def prepare_data(df: pd.DataFrame, targets: list[str], *, selected_features: list[str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return feature matrix ``X`` and target ``y`` with rows containing NaN
     in any target removed. Excludes non-feature columns such as nF_* and
     legacy display columns from X."""
@@ -115,7 +125,13 @@ def prepare_data(df: pd.DataFrame, targets: list[str]) -> tuple[pd.DataFrame, pd
     ])
     # Exclude any Not-in-Use columns
     drop_cols.update([c for c in df.columns if isinstance(c, str) and (c.startswith("F_NiU_") or c.startswith("L_NiU_") or c.startswith("nF_"))])
-    X = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
+    drop_cols.update([c for c in df.columns if isinstance(c, str) and ("LABLE" in c or "LABEL" in c)])
+    if selected_features:
+        # Intersect with allowed feature set
+        keep = [c for c in selected_features if c in df.columns and c not in drop_cols]
+        X = df[keep]
+    else:
+        X = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
     X = X.select_dtypes(include=["number"]).fillna(0)
     return X, y
 
@@ -217,9 +233,10 @@ def run_training_df(
     split_indices: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None,
     weight_scheme: str = "blockmin",
     weight_factor: float = 5.0,
+    selected_features: list[str] | None = None,
 ) -> tuple[list[float], list[float]]:
     """Train a model from an already loaded DataFrame."""
-    X, y = prepare_data(df, targets)
+    X, y = prepare_data(df, targets, selected_features=selected_features)
     # Default: alle Gewichte = 1
     weights = np.ones(len(y), dtype=float)
     # Optionale Gewichtung: Zeilen mit L_NiU_StockOut_MinAdd > 0 hÃ¶her gewichten

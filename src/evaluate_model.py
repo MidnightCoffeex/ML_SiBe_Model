@@ -1,6 +1,5 @@
-import argparse
-from pathlib import Path
-from typing import Tuple
+﻿from pathlib import Path
+from typing import Tuple, Optional
 
 import joblib
 import matplotlib
@@ -49,6 +48,13 @@ def _dispo_date_range(raw_dir: str, part: str) -> Tuple[pd.Timestamp | None, pd.
     return None, None
 
 
+def _resolve_col(df: pd.DataFrame, base: str) -> Optional[str]:
+    for cand in (base, f"F_NiU_{base}", f"nF_{base}"):
+        if cand in df.columns:
+            return cand
+    return None
+
+
 def _evaluate_range(
     results: pd.DataFrame, prefix: str, target: str, output_dir: str
 ) -> None:
@@ -71,8 +77,10 @@ def _evaluate_range(
     name_peak = "Spitzenlinie Vorschlag"
     name_peak_combined = "Spitzenlinie + Gesamtbestand ohne SiBe"
     part_txt = str(results.get("Teil").iloc[0]) if "Teil" in results.columns and not results.empty else ""
-    wbz_val = results.get("WBZ_Days").iloc[0] if "WBZ_Days" in results.columns and not results.empty else None
-    wbz_txt = f" – WBZ: {int(wbz_val)} Tage" if isinstance(wbz_val, (int, float)) and pd.notna(wbz_val) else ""
+    # WBZ-Days (robust gegenÃ¼ber NiU-Prefix)
+    wbz_col = _resolve_col(results, "WBZ_Days")
+    wbz_val = results.get(wbz_col).iloc[0] if wbz_col and not results.empty else None
+    wbz_txt = f" â€“ WBZ: {int(wbz_val)} Tage" if isinstance(wbz_val, (int, float)) and pd.notna(wbz_val) else ""
     heading = f"Teil {part_txt}{wbz_txt}" if part_txt else (f"WBZ{wbz_txt}" if wbz_txt else "")
     mae = mean_absolute_error(results[actual_col], results[pred_col])
     rmse = np.sqrt(mean_squared_error(results[actual_col], results[pred_col]))
@@ -103,7 +111,7 @@ def _evaluate_range(
         x=actual_col,
         y=pred_col,
         labels={actual_col: name_actual_sibe, pred_col: name_pred},
-        title=f"{heading} – Aktueller SiBe vs. Vorschlag" if heading else "Aktueller SiBe vs. Vorschlag",
+        title=f"{heading} â€“ Aktueller SiBe vs. Vorschlag" if heading else "Aktueller SiBe vs. Vorschlag",
     )
     fig.write_html(Path(output_dir) / f"{prefix}_actual_vs_pred.html")
 
@@ -132,7 +140,7 @@ def _evaluate_range(
         shared_xaxes=True,
         vertical_spacing=0.1,
         subplot_titles=(
-            "Vorschlag über die Zeit",
+            "Vorschlag Ã¼ber die Zeit",
             name_eod,
             name_combined,
             name_peak,
@@ -176,43 +184,47 @@ def _evaluate_range(
         row=1,
         col=1,
     )
-    fig2.add_trace(
-        go.Scatter(
-            x=results["Datum"],
-            y=results["EoD_Bestand_noSiBe"],
-            mode="lines",
-            name=name_eod,
-        ),
-        row=2,
-        col=1,
-    )
+    # EoD ohne SiBe (robust gegenÃ¼ber NiU-Prefix)
+    eod_col = _resolve_col(results, "EoD_Bestand_noSiBe")
+    if eod_col:
+        fig2.add_trace(
+            go.Scatter(
+                x=results["Datum"],
+                y=results[eod_col],
+                mode="lines",
+                name=name_eod,
+            ),
+            row=2,
+            col=1,
+        )
 
-    combined = results["EoD_Bestand_noSiBe"] + results[pred_col]
-    combined_pos = combined.where(combined > 0)
-    combined_neg = combined.where(combined <= 0)
+    if eod_col:
+        combined = results[eod_col] + results[pred_col]
+        combined_pos = combined.where(combined > 0)
+        combined_neg = combined.where(combined <= 0)
 
-    fig2.add_trace(
-        go.Scatter(
-            x=results["Datum"],
-            y=combined_pos,
-            mode="lines",
-            name=name_combined,
-            line=dict(color="blue"),
-        ),
-        row=3,
-        col=1,
-    )
-    fig2.add_trace(
-        go.Scatter(
-            x=results["Datum"],
-            y=combined_neg,
-            mode="lines",
-            showlegend=False,
-            line=dict(color="red"),
-        ),
-        row=3,
-        col=1,
-    )
+        fig2.add_trace(
+            go.Scatter(
+                x=results["Datum"],
+                y=combined_pos,
+                mode="lines",
+                name=name_combined,
+                line=dict(color="blue"),
+            ),
+            row=3,
+            col=1,
+        )
+        fig2.add_trace(
+            go.Scatter(
+                x=results["Datum"],
+                y=combined_neg,
+                mode="lines",
+                showlegend=False,
+                line=dict(color="red"),
+            ),
+            row=3,
+            col=1,
+        )
 
     # Row 4: peak curve of predictions
     fig2.add_trace(
@@ -228,23 +240,24 @@ def _evaluate_range(
     )
 
     # Row 5: peak curve + EoD_Bestand_noSiBe
-    combined2 = results["EoD_Bestand_noSiBe"] + results["pred_peak_curve"]
-    fig2.add_trace(
-        go.Scatter(
-            x=results["Datum"],
-            y=combined2,
-            mode="lines",
-            name="Peak Curve + EoD_Bestand_noSiBe",
-            line=dict(color="darkgreen"),
-        ),
-        row=5,
-        col=1,
-    )
+    if eod_col:
+        combined2 = results[eod_col] + results["pred_peak_curve"]
+        fig2.add_trace(
+            go.Scatter(
+                x=results["Datum"],
+                y=combined2,
+                mode="lines",
+                name="Peak Curve + EoD_Bestand_noSiBe",
+                line=dict(color="darkgreen"),
+            ),
+            row=5,
+            col=1,
+        )
 
     fig2.update_layout(
         hovermode="x unified",
         height=1800,
-        title_text=(f"{heading} – Zeitverlauf" if heading else "Zeitverlauf"),
+        title_text=(f"{heading} â€“ Zeitverlauf" if heading else "Zeitverlauf"),
     )
     fig2.update_yaxes(title_text=name_pred, row=1, col=1)
     fig2.update_yaxes(title_text=name_eod, row=2, col=1)
@@ -265,6 +278,7 @@ def run_evaluation(
     output_dir: str,
     raw_dir: str = "Rohdaten",
     model_type: str | None = None,
+    selected_features: list[str] | None = None,
 ) -> None:
     """Evaluate the trained model and generate plots for multiple time frames."""
     if model_type is None:
@@ -275,7 +289,7 @@ def run_evaluation(
                 break
 
     df = load_features(features_path)
-    X, y = prepare_data(df, targets)
+    X, y = prepare_data(df, targets, selected_features=selected_features)
     n = len(X)
     # Not enough samples to evaluate robustly -> skip gracefully
     if n < 3:
@@ -303,7 +317,26 @@ def run_evaluation(
         return
     model = joblib.load(model_path)
 
-    y_pred_test = model.predict(X.iloc[test_idx])
+    # Align features to model's expected columns if available
+    def _align_features(Xin: pd.DataFrame) -> pd.DataFrame:
+        try:
+            ests = getattr(model, 'estimators_', None)
+            if ests and len(ests) > 0:
+                feat = getattr(ests[0], 'feature_names_in_', None)
+                if feat is None:
+                    return Xin
+                need = list(feat)
+                cur = set(Xin.columns)
+                for c in need:
+                    if c not in cur:
+                        Xin[c] = 0.0
+                Xin = Xin[need]
+        except Exception:
+            return Xin
+        return Xin
+
+    X_test_aligned = _align_features(X.iloc[test_idx].copy())
+    y_pred_test = model.predict(X_test_aligned)
     # Clamp negative predictions to 0
     y_pred_test = np.clip(y_pred_test, 0, None)
     mae = mean_absolute_error(y.iloc[test_idx], y_pred_test, multioutput="raw_values")
@@ -316,8 +349,10 @@ def run_evaluation(
     drop_cols = set(targets)
     drop_cols.update(["EoD_Bestand", "Hinterlegter SiBe"]) 
     drop_cols.update([c for c in df.columns if isinstance(c, str) and (c.startswith("F_NiU_") or c.startswith("L_NiU_") or c.startswith("nF_"))])
+    drop_cols.update([c for c in df.columns if isinstance(c, str) and ("LABLE" in c or "LABEL" in c)])
     X_full = df.drop(columns=[c for c in drop_cols if c in df.columns], errors="ignore")
     X_full = X_full.select_dtypes(include=["number"]).fillna(0)
+    X_full = _align_features(X_full)
     full_pred = model.predict(X_full)
     # Clamp negative predictions to 0
     full_pred = np.clip(full_pred, 0, None)
@@ -326,6 +361,15 @@ def run_evaluation(
         results_full[f"pred_{col}"] = full_pred[:, i]
 
     part = str(df["Teil"].iloc[0]) if "Teil" in df.columns else ""
+    # Ensure an 'Hinterlegter SiBe' column exists for plotting/metrics
+    if "Hinterlegter SiBe" not in results_full.columns:
+        for cand in ("F_NiU_Hinterlegter SiBe", "nF_Hinterlegter SiBe"):
+            if cand in results_full.columns:
+                results_full["Hinterlegter SiBe"] = results_full[cand]
+                break
+        if "Hinterlegter SiBe" not in results_full.columns:
+            # fallback to zeros
+            results_full["Hinterlegter SiBe"] = 0.0
     dispo_start, dispo_end = _dispo_date_range(raw_dir, part)
 
     # Evaluation for specified ranges

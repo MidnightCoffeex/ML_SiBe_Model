@@ -306,7 +306,12 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         if not date_set:
             continue
 
-        feat = pd.DataFrame({'Datum': sorted(date_set)})
+        # Build a continuous daily timeline between earliest and latest relevant dates
+        # This ensures eventless days are represented for robust rolling windows and lags
+        min_date = pd.to_datetime(min(date_set))
+        max_date = pd.to_datetime(max(date_set))
+        full_days = pd.date_range(min_date, max_date, freq='D')
+        feat = pd.DataFrame({'Datum': full_days})
         feat['Teil'] = part
 
         # merge Lagerbewegung inventory
@@ -333,14 +338,20 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             feat['Bedarfsmenge'] = 0
             feat['cum_net'] = 0
 
-        # compute end-of-day stock
+        # compute end-of-day stock on a daily grid
+        # - before first_dispo_date: carry forward last known Lagerbestand (no backfill to avoid leakage)
+        # - on/after first_dispo_date: baseline + cumulative net movements
+        lb_num = pd.to_numeric(feat['Lagerbestand'], errors='coerce')
         if first_dispo_date is not None:
             pre_mask = feat['Datum'] < first_dispo_date
-            feat.loc[pre_mask, 'EoD_Bestand'] = feat.loc[pre_mask, 'Lagerbestand']
+            # forward-fill Lagerbestand over pre-Dispo window only
+            feat.loc[pre_mask, 'EoD_Bestand'] = lb_num.loc[pre_mask].ffill()
             post_mask = feat['Datum'] >= first_dispo_date
             feat.loc[post_mask, 'EoD_Bestand'] = baseline + feat.loc[post_mask, 'cum_net']
         else:
-            feat['EoD_Bestand'] = feat['Lagerbestand'].fillna(baseline)
+            # no Dispo present: forward-fill across entire range
+            feat['EoD_Bestand'] = lb_num.ffill()
+        # final numeric coercion; keep unknowns as 0 to stay backward-compatible
         feat['EoD_Bestand'] = pd.to_numeric(feat['EoD_Bestand'], errors='coerce').fillna(0)
 
         # safety stock history: apply latest change as of each feature date (backward asof),
@@ -396,6 +407,9 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         # rename display-only (no-feature) columns and compute training series
         feat.rename(columns={'EoD_Bestand': 'F_NiU_EoD_Bestand'}, inplace=True)
         feat.rename(columns={'Hinterlegter SiBe': 'F_NiU_Hinterlegter SiBe'}, inplace=True)
+        # Für Auswertung/Plots zusätzlich eine nicht-NiU-Kopie behalten
+        if 'F_NiU_Hinterlegter SiBe' in feat.columns and 'Hinterlegter SiBe' not in feat.columns:
+            feat['Hinterlegter SiBe'] = feat['F_NiU_Hinterlegter SiBe']
         feat['EoD_Bestand_noSiBe'] = feat['F_NiU_EoD_Bestand'] - feat['F_NiU_Hinterlegter SiBe']
         feat['Flag_StockOut'] = (feat['EoD_Bestand_noSiBe'] <= 0).astype(int)
 
@@ -443,8 +457,8 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             y = np.array(y_vals, dtype=float)
             mmin = float(np.nanmin(y)) if y.size else 0.0
             lbl_block[i] = max(0.0, -mmin)
-        # ausblenden als Diagnose (Label Not-in-Use)
-        feat['L_NiU_WBZ_BlockMinAbs'] = lbl_block
+        # Basiswert des Block-Min-Abs (wird nach Faktorberechnung angepasst)
+        block_base = lbl_block.copy()
 
         # Halbjahres-Regel mit Faktoren: Fensterweise (ca. 6 Monate) denselben Wert setzen,
         # und zwar den Höchstwert von L_NiU_WBZ_BlockMinAbs innerhalb des Fensters,
@@ -515,6 +529,9 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         feat['F_NiU_Factor_Freq'] = f_freq_arr
         feat['F_NiU_Factor_Vol'] = f_vol_arr
         feat['LABLE_HalfYear_Target'] = lbl_halfyear
+        # Faktoren auch auf den per-Date BlockMinAbs anwenden (gedeckelt auf 0.40 Gesamtfaktor)
+        total_factor_arr = np.minimum(f_wbz_arr + f_freq_arr + f_vol_arr, 0.40)
+        feat['L_NiU_WBZ_BlockMinAbs'] = block_base * (1.0 + total_factor_arr)
 
         # ----- rolling time features -----
         demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
@@ -525,6 +542,51 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             feat[f'DemandMean_{key}'] = demand_series.shift(1).rolling(w, min_periods=1).mean()
             feat[f'DemandMax_{key}'] = demand_series.shift(1).rolling(w, min_periods=1).max()
 
+        # ----- transformations: log1p and per-SKU (Teil) normalization for key quantities -----
+        # 1) EoD_Bestand_noSiBe transformations
+        try:
+            # log1p on non-negative part; separate positive deficit magnitude as log1p too
+            eod = pd.to_numeric(feat['EoD_Bestand_noSiBe'], errors='coerce')
+            feat['EoD_Bestand_noSiBe_log1p'] = np.log1p(eod.clip(lower=0))
+            deficit_pos = (-eod).clip(lower=0)
+            feat['DeficitPos_log1p'] = np.log1p(deficit_pos)
+            # per-SKU z-score and robust z-score
+            if 'Teil' in feat.columns:
+                grp = feat.groupby('Teil')
+                mean = grp['EoD_Bestand_noSiBe'].transform('mean')
+                std = grp['EoD_Bestand_noSiBe'].transform('std')
+                std = std.replace(0, np.nan)
+                z = (eod - mean) / std
+                feat['EoD_Bestand_noSiBe_z_Teil'] = z.fillna(0)
+                med = grp['EoD_Bestand_noSiBe'].transform('median')
+                q75 = grp['EoD_Bestand_noSiBe'].transform(lambda s: s.quantile(0.75))
+                q25 = grp['EoD_Bestand_noSiBe'].transform(lambda s: s.quantile(0.25))
+                iqr = (q75 - q25).replace(0, np.nan)
+                robz = (eod - med) / iqr
+                feat['EoD_Bestand_noSiBe_robz_Teil'] = robz.fillna(0)
+        except Exception:
+            pass
+
+        # 2) DemandMean_* and DemandMax_* transformations per column
+        demand_cols = [c for c in feat.columns if c.startswith('DemandMean_') or c.startswith('DemandMax_')]
+        for c in demand_cols:
+            try:
+                vals = pd.to_numeric(feat[c], errors='coerce').fillna(0)
+                # log1p
+                feat[f'{c}_log1p'] = np.log1p(vals.clip(lower=0))
+                if 'Teil' in feat.columns:
+                    grp = feat.groupby('Teil')
+                    mean = grp[c].transform('mean')
+                    std = grp[c].transform('std').replace(0, np.nan)
+                    feat[f'{c}_z_Teil'] = ((vals - mean) / std).fillna(0)
+                    med = grp[c].transform('median')
+                    q75 = grp[c].transform(lambda s: s.quantile(0.75))
+                    q25 = grp[c].transform(lambda s: s.quantile(0.25))
+                    iqr = (q75 - q25).replace(0, np.nan)
+                    feat[f'{c}_robz_Teil'] = ((vals - med) / iqr).fillna(0)
+            except Exception:
+                continue
+
         feat = feat[
             [
                 'Teil',
@@ -532,6 +594,10 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 'F_NiU_EoD_Bestand',
                 'F_NiU_Hinterlegter SiBe',
                 'EoD_Bestand_noSiBe',
+                'EoD_Bestand_noSiBe_log1p',
+                'EoD_Bestand_noSiBe_z_Teil',
+                'EoD_Bestand_noSiBe_robz_Teil',
+                'DeficitPos_log1p',
                 'Flag_StockOut',
                 'WBZ_Days',
                 'L_NiU_StockOut_MinAdd',
@@ -548,6 +614,18 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 if c.startswith('DemandMean_') or c.startswith('DemandMax_')
             ]
         ]
+
+        # Drop Not-in-Use diagnostics before persisting, but KEEP essential NiU display columns
+        essential_niu = {"F_NiU_EoD_Bestand", "F_NiU_Hinterlegter SiBe"}
+        keep_cols = []
+        for c in feat.columns:
+            cs = str(c)
+            if cs.startswith("L_NiU_"):
+                continue
+            if cs.startswith("F_NiU_") and cs not in essential_niu:
+                continue
+            keep_cols.append(c)
+        feat = feat[keep_cols]
 
         processed[part] = {'df': feat, 'first_dispo_date': first_dispo_date}
 
@@ -567,6 +645,14 @@ def save_feature_folders_split(
     """
     out_feat = Path(features_dir)
     out_test = Path(test_dir)
+
+    def _save_parquet_or_csv(df: pd.DataFrame, path: Path) -> None:
+        try:
+            df.to_parquet(path, index=False)
+        except Exception:
+            # Fallback when parquet engine is unavailable: write CSV next to intended parquet
+            csv_path = path.with_suffix('.csv')
+            df.to_csv(csv_path, index=False)
     for part, bundle in features.items():
         df = bundle['df']  # type: ignore[assignment]
         first_dispo_date = bundle.get('first_dispo_date')  # type: ignore[assignment]
@@ -601,7 +687,7 @@ def save_feature_folders_split(
                 y = np.array(y_vals, dtype=float)
                 mmin = float(np.nanmin(y)) if y.size else 0.0
                 lbl_block[ii] = max(0.0, -mmin)
-            hist_df['L_NiU_WBZ_BlockMinAbs'] = lbl_block
+            block_base = lbl_block.copy()
 
             # Half-year window with factors (within hist only)
             lbl_halfyear_base = np.zeros(len(hist_df), dtype=float)
@@ -665,31 +751,41 @@ def save_feature_folders_split(
             hist_df['F_NiU_Factor_Freq'] = f_freq_arr
             hist_df['F_NiU_Factor_Vol'] = f_vol_arr
             hist_df['LABLE_HalfYear_Target'] = lbl_halfyear
+            # Apply factors also to per-date BlockMinAbs
+            total_factor_arr = np.minimum(f_wbz_arr + f_freq_arr + f_vol_arr, 0.40)
+            hist_df['L_NiU_WBZ_BlockMinAbs'] = block_base * (1.0 + total_factor_arr)
+
+        # Ensure identical column structure between hist_df and dispo_df
+        all_cols = list(hist_df.columns)
+        for c in all_cols:
+            if c not in dispo_df.columns:
+                dispo_df[c] = np.nan
+        dispo_df = dispo_df[all_cols]
 
         # write historical subset
         part_dir = out_feat / str(part)
         part_dir.mkdir(parents=True, exist_ok=True)
         if not hist_df.empty:
-            hist_df.to_parquet(part_dir / 'features.parquet', index=False)
+            _save_parquet_or_csv(hist_df, part_dir / 'features.parquet')
             try:
                 hist_df.to_excel(part_dir / 'features.xlsx', index=False)
             except Exception:
                 pass
         else:
-            # create empty placeholder parquet to signal existence
-            hist_df.to_parquet(part_dir / 'features.parquet', index=False)
+            # create empty placeholder (CSV) to signal existence if parquet not available
+            _save_parquet_or_csv(hist_df, part_dir / 'features.parquet')
 
         # write dispo subset
         part_dir_t = out_test / str(part)
         part_dir_t.mkdir(parents=True, exist_ok=True)
         if not dispo_df.empty:
-            dispo_df.to_parquet(part_dir_t / 'features.parquet', index=False)
+            _save_parquet_or_csv(dispo_df, part_dir_t / 'features.parquet')
             try:
                 dispo_df.to_excel(part_dir_t / 'features.xlsx', index=False)
             except Exception:
                 pass
         else:
-            dispo_df.to_parquet(part_dir_t / 'features.parquet', index=False)
+            _save_parquet_or_csv(dispo_df, part_dir_t / 'features.parquet')
 
 
 def run_pipeline(raw_dir: str, output_dir: str = 'Features') -> None:
@@ -698,9 +794,16 @@ def run_pipeline(raw_dir: str, output_dir: str = 'Features') -> None:
     - ``output_dir`` contains historical (pre-Dispo) subsets per part.
     - ``Test_Set`` sibling folder contains Dispo-period subsets per part.
     """
-    features = build_features_by_part(raw_dir)
-    # Write historical into output_dir and Dispo-period into Test_Set
-    save_feature_folders_split(features, output_dir, 'Test_Set')
+    # Resolve column spec sheet next to the AGENTS_MAKE_ML package
+    try:
+        default_xlsx = Path(__file__).resolve().parents[1] / 'Spaltenbedeutung.xlsx'
+    except Exception:
+        default_xlsx = Path('Spaltenbedeutung.xlsx')
+    features = build_features_by_part(raw_dir, xlsx_path=str(default_xlsx))
+    # Write historical into output_dir and Dispo-period into a sibling folder at the same level
+    out_base = Path(output_dir)
+    test_subdir = str(out_base.parent / 'Test_Set')
+    save_feature_folders_split(features, output_dir, test_subdir)
 
 
 if __name__ == '__main__':
