@@ -41,6 +41,7 @@ def main() -> None:
     parser.add_argument("--weight_scheme", help="Weighting: none|blockmin|flag")
     parser.add_argument("--weight_factor", type=float, help="Weight factor for selected scheme")
     parser.add_argument("--feature-list", help="Path to selected_features.json")
+    parser.add_argument("--progress", action="store_true", help="Show live training progress")
     args = parser.parse_args()
 
     if not args.data:
@@ -86,6 +87,14 @@ def main() -> None:
     if not getattr(args, 'ts_scope', None):
         entry = input("Timeseries-Scope [global|local] [global]: ")
         args.ts_scope = entry.strip() if entry else "global"
+    # Progress prompt (optional)
+    try:
+        has_progress = bool(args.progress)
+    except Exception:
+        has_progress = False
+    if not has_progress:
+        entry = input("Progress-Balken anzeigen? [y/N]: ").strip().lower()
+        if entry in ("y", "j", "ja", "yes"): args.progress = True
 
     part_name = args.part if args.part else "ALL"
 
@@ -233,6 +242,7 @@ def main() -> None:
             weight_scheme=args.weight_scheme,
             weight_factor=args.weight_factor,
             selected_features=selected_features,
+            progress=args.progress,
         )
 
 

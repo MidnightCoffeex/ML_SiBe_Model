@@ -14,6 +14,10 @@ from sklearn.metrics import (
     mean_absolute_percentage_error,
 )
 from sklearn.inspection import permutation_importance
+import sys
+import threading
+import time
+import os
 
 
 def _compute_block_min_abs_label(df: pd.DataFrame, horizon_floor_days: int = 14) -> pd.Series:
@@ -234,6 +238,7 @@ def run_training_df(
     weight_scheme: str = "blockmin",
     weight_factor: float = 5.0,
     selected_features: list[str] | None = None,
+    progress: bool = False,
 ) -> tuple[list[float], list[float]]:
     """Train a model from an already loaded DataFrame."""
     X, y = prepare_data(df, targets, selected_features=selected_features)
@@ -277,15 +282,77 @@ def run_training_df(
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
-    model = trainer(
-        X.iloc[train_idx],
-        y.iloc[train_idx],
-        n_estimators=n_estimators,
-        learning_rate=learning_rate,
-        max_depth=max_depth,
-        subsample=subsample,
-        sample_weight=weights[train_idx],
-    )
+    # Progress support helpers
+    class _ProgressBar:
+        def __init__(self, total: int, label: str = "Training") -> None:
+            self.total = max(1, int(total))
+            self.current = 0
+            self.label = label
+            self._stop = threading.Event()
+            self._lock = threading.Lock()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+        def start(self) -> None:
+            self._thread.start()
+        def stop(self) -> None:
+            self._stop.set()
+            self._thread.join(timeout=1.0)
+            with self._lock:
+                self.current = self.total
+            self._render(final=True)
+            sys.stdout.write("\n"); sys.stdout.flush()
+        def tick(self, n: int = 1) -> None:
+            with self._lock:
+                self.current = min(self.total, self.current + n)
+        def _run(self) -> None:
+            while not self._stop.is_set():
+                self._render()
+                time.sleep(0.1)
+        def _render(self, final: bool = False) -> None:
+            with self._lock:
+                cur = self.current; total = self.total
+            pct = int(100 * cur / total)
+            bar_len = 30
+            filled = int(bar_len * pct / 100)
+            bar = "#"*filled + "-"*(bar_len - filled)
+            sys.stdout.write(f"\r{self.label} [{bar}] {pct:3d}% ({cur}/{total})")
+            sys.stdout.flush()
+
+    def _train_gb_with_progress(Xtr, Ytr, sw, label: str):
+        pbar = _ProgressBar(total=n_estimators * Ytr.shape[1], label=label)
+        pbar.start()
+        estimators = []
+        for i in range(Ytr.shape[1]):
+            est = GradientBoostingRegressor(
+                random_state=0,
+                n_estimators=1,
+                learning_rate=learning_rate,
+                max_depth=max_depth,
+                subsample=subsample,
+                warm_start=True,
+            )
+            for t in range(1, n_estimators + 1):
+                est.n_estimators = t
+                est.fit(Xtr, Ytr.iloc[:, i], sample_weight=sw)
+                pbar.tick(1)
+            estimators.append(est)
+        pbar.stop()
+        m = MultiOutputRegressor(GradientBoostingRegressor())
+        m.estimators_ = estimators
+        return m
+
+    # First fit
+    if model_type == "gb" and (progress or os.environ.get('TRAIN_PROGRESS') == '1'):
+        model = _train_gb_with_progress(X.iloc[train_idx], y.iloc[train_idx], weights[train_idx], label="Training gb")
+    else:
+        model = trainer(
+            X.iloc[train_idx],
+            y.iloc[train_idx],
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            max_depth=max_depth,
+            subsample=subsample,
+            sample_weight=weights[train_idx],
+        )
     val_pred = model.predict(X.iloc[val_idx])
     val_mae = mean_absolute_error(y.iloc[val_idx], val_pred, multioutput="raw_values")
     val_rmse = np.sqrt(mean_squared_error(y.iloc[val_idx], val_pred, multioutput="raw_values"))
@@ -293,15 +360,18 @@ def run_training_df(
     val_mape = mean_absolute_percentage_error(y.iloc[val_idx], val_pred)
 
     # refit on all data except test
-    model = trainer(
-        X.iloc[train_full_idx],
-        y.iloc[train_full_idx],
-        n_estimators=n_estimators,
-        learning_rate=learning_rate,
-        max_depth=max_depth,
-        subsample=subsample,
-        sample_weight=weights[train_full_idx],
-    )
+    if model_type == "gb" and (progress or os.environ.get('TRAIN_PROGRESS') == '1'):
+        model = _train_gb_with_progress(X.iloc[train_full_idx], y.iloc[train_full_idx], weights[train_full_idx], label="Refit gb")
+    else:
+        model = trainer(
+            X.iloc[train_full_idx],
+            y.iloc[train_full_idx],
+            n_estimators=n_estimators,
+            learning_rate=learning_rate,
+            max_depth=max_depth,
+            subsample=subsample,
+            sample_weight=weights[train_full_idx],
+        )
     Path(model_path).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, model_path)
     print(f"Model saved to {model_path}")

@@ -1,0 +1,12 @@
+feature,importance
+Lag_EoD_Bestand_noSiBe_mean_wbzTage,500.3397573162648
+Lag_EoD_Bestand_noSiBe_mean_28Tage,264.942877274275
+EoD_Bestand_noSiBe,232.56218680429419
+EoD_Bestand_noSiBe_log1p,186.51675497957643
+DemandMean_100_log1p,106.39510120340572
+Lag_EoD_Bestand_noSiBe_mean_2xwbzTage,98.767256315632
+DemandMean_25_log1p,92.230203954308
+DeficitPos_log1p,50.33043323210177
+DemandMean_50_log1p,42.12265493752553
+Lag_EoD_Bestand_noSiBe_mean_7Tage,34.27407051651251
+DemandMean_66_log1p,30.562092729944016

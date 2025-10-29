@@ -1,16 +1,8 @@
 # AGENTS_MAKE_ML
 
-This repository contains raw CSV files for a machine learning project.
-The folder `Rohdaten/` holds the source data while `Spaltenbedeutung.xlsx` explains each column.
+Dieses Projekt baut aus Rohdaten tägliche Feature‑Tabellen je Teil und trainiert darauf ML‑Modelle zur Ableitung eines stabilen Sicherheitsbestands (SiBe). Die wichtigsten Ordner sind `Rohdaten/` (Quellen), `Features/` (generierte Merkmale), `Modelle/` (trainierte Modelle) sowie `plots/` (Auswertungen). `Spaltenbedeutung.xlsx` beschreibt die Spalten semantisch.
 
-## Project overview
-
-The goal is to predict an optimal *Sicherheitsbestand* (safety stock) for each
-part on specific dates.  A preprocessing pipeline converts the raw CSV exports
-into a single feature table.  On top of these features a Gradient Boosting
-model is trained to suggest suitable safety stock levels.
-
-## Dataset structure
+## Daten & Struktur
 
 ```
 Rohdaten/
@@ -20,192 +12,103 @@ Rohdaten/
     20250313_M100_SiBe.csv
     20250313_M100_TeileWert.csv
     20250313_M100_Teilestamm.csv
-    ... (other dated CSV files)
-Spaltenbedeutung.xlsx   # Excel sheet describing columns
+    ...
+Spaltenbedeutung.xlsx
 ```
 
-CSV files are semicolon separated and contain inventory and planning data.
+CSV‑Dateien sind typischerweise semikolon‑getrennt und enthalten Bestands‑, Bewegungs‑ und Dispositionsdaten.
 
-## Pipeline and features
+## Pipeline & Features (aktuell)
 
-Each CSV file name starts with a date in ``YYYYMMDD`` format followed by the
-dataset type and in some cases a part number.  The pipeline parses these
-filenames, loads the tables and filters for warehouse location ``120`` via the
-``Lagerort`` column.  Decimal numbers written with commas are converted to
-standard floating point values.
+- Parsing der Dateien (Datum im Namen `YYYYMMDD_*`), Normalisierung (Komma‑Dezimal, Trimmen), Filter auf `Lagerort=120`.
+- Tägliche Reindexierung: Auch „ereignislose“ Tage werden erzeugt; zentrale Bestandswerte werden per Forward‑Fill fortgetragen.
+- Dispo‑Bewegungen werden tagesgenau verrechnet; bedarfsbasierte Features (DemandMean/Max, inkl. `log1p`, `z_`, `robz`) werden für alle Tage neu berechnet.
+- SiBe‑Historie wird per asof‑Join zeitlich korrekt angelegt.
+- Immer enthaltene Basis‑Spalten (nicht abwählbar):
+  - `F_NiU_EoD_Bestand` (Anzeige)
+  - `F_NiU_Hinterlegter SiBe` (Anzeige)
+  - `EoD_Bestand_noSiBe` (Feature‑Basis)
+- Weitere Feature‑Gruppen (Auszug):
+  - Nachfrage: `DemandMean_*`, `DemandMax_*` inkl. Varianten `log1p`, `z_`, `robz`
+  - Flags: `Flag_StockOut`; WBZ: `WBZ_Days`
+  - Labels: `L_NiU_WBZ_BlockMinAbs` (Diagnose), `LABLE_HalfYear_Target` (Training)
+- Lag‑Features (neu):
+  - Punkt‑Lags: `Lag_EoD_Bestand_noSiBe_{7Tage,28Tage,wbzTage,2xwbzTage}`
+  - Mittel‑Lags: `Lag_EoD_Bestand_noSiBe_mean_{7Tage,28Tage,wbzTage,2xwbzTage}`
 
-From the movement history and planning tables a daily time series per part is
-generated. Planned receipts (``Deckungsmenge``) increase the inventory while
-planned demand (``Bedarfsmenge``) reduces it. The safety stock history
-(``SiBeVerlauf``) is joined using the last known value up to each date.
+Abhängigkeiten: Wird ein abgeleitetes Feature (z. B. `DemandMean_25_log1p`) gewählt, werden benötigte Basisspalten intern berechnet, aber nur ausgegeben, wenn sie ebenfalls explizit ausgewählt sind.
 
-Each produced feature file contains key columns (excerpt):
+Leistung: Große Zeiträume → höhere RAM/IO‑Last. Für Schnelltests nur wenige Teile/Zeiträume wählen.
 
-- ``Teil`` / ``Datum``
-- ``F_NiU_EoD_Bestand`` (display only)
-- ``F_NiU_Hinterlegter SiBe`` (display only)
-- ``EoD_Bestand_noSiBe``, ``Flag_StockOut``, ``WBZ_Days``
-- ``L_NiU_StockOut_MinAdd`` (diagnostic)
-- ``L_NiU_WBZ_BlockMinAbs`` (diagnostic)
-- ``LABLE_HalfYear_Target`` (training target)
-- ``DemandMean_*`` / ``DemandMax_*`` (rolling consumption)
+## Voraussetzungen
 
-The resulting table contains one row per part and date and forms the input for
-model training.
-
-Processing all raw files can require substantial memory depending on the
-number of dates included. When running the full dataset, ensure enough RAM
-is available or process only a subset of files.
-
-## Required software
-
-- Python 3.11
-- pandas
-- NumPy
-- scikit-learn
-- Matplotlib
-- pyarrow
-- openpyxl (for Excel output)
-- plotly (for interactive graphs)
-
-Install the dependencies with pip:
+- Python 3.11+
+- Abhängigkeiten aus `requirements.txt` installieren:
 
 ```bash
-python3.11 -m pip install pandas numpy scikit-learn matplotlib pyarrow openpyxl
+python -m pip install -r requirements.txt
 ```
 
-### Local setup
+Optional: `xgboost`, `lightgbm` für zusätzliche Modelle.
 
-Clone the repository and install the packages listed in ``requirements.txt``:
+## Quickstart
+
+1) Features erzeugen (GUI, selektiv):
 
 ```bash
-git clone <repository-url>
-cd AGENTS_MAKE_ML
-python3.11 -m pip install -r requirements.txt
+python scripts/build_features_gui.py
 ```
 
-All scripts assume Python 3.11 or later. For XGBoost and LightGBM support
-additional packages are required:
+- Checkboxen für Features/Labels; Abhängigkeiten werden automatisch erfüllt.
+- Immer enthalten: `F_NiU_EoD_Bestand`, `F_NiU_Hinterlegter SiBe`, `EoD_Bestand_noSiBe`.
+- Ausgabe: `Features/<Teil>/features.parquet|xlsx`. Für Tests wurde zusätzlich `GPT_Features_Test/` genutzt.
+
+2) Training:
 
 ```bash
-python3.11 -m pip install xgboost lightgbm
+python scripts/train.py
 ```
 
-## Step-by-step guide
+- Interaktive Abfrage von Feature‑Pfad, Teil (oder `ALL`), Modelltyp (`gb`, optional `xgb`, `lgbm`), Hyperparametern und optionalem Progress‑Balken (`--progress` oder Prompt).
+- Modelle und Metriken landen unter `Modelle/<Teil|ALL>/<Modelltyp>/<ID>/`.
 
-1. **Features erzeugen**
-
-   ```bash
-   python3.11 scripts/build_features.py
-   ```
-
-   - Pfade zu ``Rohdaten`` und ``Features`` werden abgefragt.
-   - Für jedes Teil entsteht ``Features/<Teil>/features.parquet`` und ``features.xlsx``.
-   - Die Konsole zeigt den Fortschritt je verarbeiteter Datei.
-
-2. **Modelle trainieren**
-
-   ```bash
-   python3.11 scripts/train.py --models gb,xgb,lgbm
-   ```
-
-   - Wähle Feature-Ordner, Teilnummer (``ALL`` für alle) und eine Modell-ID.
-   - Es werden ``model.joblib``, ``metrics.csv`` und ``feature_importances.csv`` unter ``Modelle/<Teil>/<Modelltyp>/<ID>/`` gespeichert.
-   - Die Ausgabe enthält Validierungs- und Testmetriken (MAE, RMSE, R², MAPE).
-
-3. **Modelle auswerten**
-
-   ```bash
-   python3.11 scripts/evaluate.py --model-type gb --model-id 1
-   ```
-
-   - Gibt Features-Pfad, Teil, Modellverzeichnis und Zielordner für Plots an.
-   - Ergebnisse landen unter ``New_Test_Plots/<Teil|ALL>/<Modelltyp>/<ID>/`` und umfassen ``*_predictions.csv``/``.xlsx`` sowie PNG/HTML-Grafiken.
-   - Die Konsole meldet erneut MAE, RMSE, R² und MAPE.
-
-## Running the pipeline
-
-To generate the feature table from the raw CSV files use the wrapper in
-`scripts/`:
+3) Evaluierung:
 
 ```bash
-python3.11 scripts/build_features.py
+python scripts/evaluate.py
 ```
 
-Beim Aufruf werden die benötigten Pfade interaktiv abgefragt. Die Pipeline legt
-für jedes Teil einen Unterordner unter ``Features/`` an und speichert dort
-sowohl eine ``features.parquet`` als auch eine ``features.xlsx`` Datei. Die
-Parquet-Datei dient als direkte Eingabe für die Modelle, die Excel-Datei zur
-manuellen Prüfung.
+- Interaktive Abfrage analog Training. Plots/Exports unter `plots/<Teil|ALL>/<Modelltyp>/<ID>/`.
 
-## Training models
+## Selektiver Feature‑Build (Details)
 
-After preprocessing, train one or more models via:
+- GUI listet alle verfügbaren Features (Demand, `log1p`/`z_`/`robz`, Lags, Flags, …) und Labels.
+- Abhängigkeiten: Wird ein abgeleitetes Feature angewählt, werden benötigte Basiswerte gerechnet, aber nur ausgegeben, wenn ebenfalls angewählt.
+- „Ereignislose“ Tage werden durch Reindexing erzeugt; Bestandswerte werden vorwärtsgetragen; Demand‑Features werden für alle Tage neu berechnet.
 
-```bash
-python3.11 scripts/train.py --models gb,xgb,lgbm
-```
+## Training (Details)
 
-The script supports the scikit-learn Gradient Boosting regressor (``gb``) as
-well as XGBoost (``xgb``) and LightGBM (``lgbm``). Multiple types can be
-specified as a comma separated list and will be trained sequentially using the
-same train/validation/test split. If no model type is given, ``gb`` is used for
-backwards compatibility.
+- Modelle: `gb` (scikit‑learn), optional `xgb`, `lgbm`.
+- Gewichte: `none|blockmin|flag` inkl. Faktor (z. B. 5.0) per Prompt.
+- Progress‑Balken (parallel) für `gb` via `--progress` oder Abfrage.
+- Splits: Zeitreihen‑konform, optional CV‑Splits per Prompt.
 
-During the interactive prompts the feature directory, part number (or ``ALL``)
-and a model identifier are requested. Hyperparameters such as
-``n_estimators``, ``learning_rate``, ``max_depth`` and ``subsample`` can be
-entered manually or left at their defaults. Results are stored under
-``Modelle/<Teil|ALL>/<Modelltyp>/<Modellnummer>/`` containing the trained model,
-metrics and feature importances. ``metrics.csv`` listet Kennzahlen wie MAE
-(Mean Absolute Error), RMSE, R² und MAPE, während ``feature_importances.csv``
-den Einfluss jeder Spalte auf die Vorhersage zeigt.
+## Evaluierung
 
-Training assigns a higher weight to rows with imminent stock-outs
-(``LABLE_StockOut_MinAdd`` > 0). An optional time-series cross-validation can
-be enabled via ``--cv`` to obtain more robust performance estimates.
+- Metriken: MAE, RMSE, R², MAPE (Vorsicht bei Ziel=0).
+- Robuster Umgang mit Anzeige‑Spalten (`Hinterlegter SiBe` vs. `Hinterlegter_SiBe`).
+- Exporte: `*_predictions.csv|xlsx`, Plots als PNG/HTML unter `plots/...`.
 
-## Evaluating the model
+## Hinweise & Grenzen
 
-Once a model has been trained, run the evaluation script to compute metrics and
-create diagnostic plots:
+- Aktuell `Lagerort=120` fix.
+- Dateinamen benötigen Datum `YYYYMMDD`.
+- Große Zeiträume → hohe RAM‑Last; selektiv bauen.
 
-```bash
-python3.11 scripts/evaluate.py --model-type gb --model-id 1
-```
+## Konventionen (NiU)
 
-The evaluator infers the model type from the directory layout if not provided.
-Plots and CSV exports are written to ``New_Test_Plots/<Teil|ALL>/<Modelltyp>/<Modellnummer>/``.
-It reports MAE, RMSE, R² and MAPE on the test split and saves several graphs
-both as PNG and HTML files:
-
-- ``actual_vs_pred.png`` / ``.html`` – scatter plot of predicted versus actual values
-- ``predictions_over_time.png`` / ``.html`` – comparison of predictions and actual values by date
-- ``training_history.png`` / ``.html`` � model deviance over boosting iterations
-
-``*_predictions.csv`` und ``*_predictions.xlsx`` enthalten die berechneten
-Werte je Datum. MAE (Mean Absolute Error) misst die durchschnittliche Abweichung,
-RMSE die quadratische Abweichung, R² den Anteil erklärter Varianz und MAPE die
-prozentuale Abweichung.
-
-Die ausgegebene Feature-Importance basiert auf einer Permutation Importance des
-Test-Splits. Hohe Werte bedeuten, dass die jeweilige Spalte einen großen
-Einfluss auf die Vorhersage hat.
-
-## Known limitations
-
-- Only rows with ``Lagerort`` 120 are processed.
-- Date information is extracted from the filename and must follow the
-  ``YYYYMMDD`` pattern.
-- The raw exports need to be complete; missing tables for a date lead to sparse
-  feature rows.
-- Building the feature set for many dates can require several gigabytes of
-  memory.  If resource limits are reached, process only a subset of the files.
-
-
-## Naming & Exclusions (NiU)
-- ``F_NiU_*``: feature/display not in use (never used as model input).
-- ``L_NiU_*``: label/diagnostic not in use (helper columns; not inputs).
-- Training target: ``LABLE_HalfYear_Target`` (semiannual constant target per window based on the max of ``L_NiU_WBZ_BlockMinAbs``).
-- Train/Eval automatically exclude any columns with ``F_NiU_``/``L_NiU_`` (and legacy ``nF_``) from the feature matrix.
+- `F_NiU_*`: Anzeige/Hilfsspalten, nicht fürs Training.
+- `L_NiU_*`: Diagnose‑Labels, nicht fürs Training.
+- Trainingsziel: `LABLE_HalfYear_Target` (aus `L_NiU_WBZ_BlockMinAbs`).
+- Train/Eval schließen `F_NiU_`/`L_NiU_`/`nF_` automatisch aus.
 

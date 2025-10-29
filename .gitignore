@@ -1,4 +1,4 @@
-﻿Modelle/
+﻿plots/
 Features/
 Test_Set/
 Test_Plots/
@@ -14,3 +14,6 @@ Graphen_Check/
 F_Aktuell/
 Rohdaten_Aktuell/
 Plots_Aktuell/
+GUI_Features/
+GUI_Features_Plots/
+GUI_Features_Test/

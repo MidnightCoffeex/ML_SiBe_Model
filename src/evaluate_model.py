@@ -363,7 +363,7 @@ def run_evaluation(
     part = str(df["Teil"].iloc[0]) if "Teil" in df.columns else ""
     # Ensure an 'Hinterlegter SiBe' column exists for plotting/metrics
     if "Hinterlegter SiBe" not in results_full.columns:
-        for cand in ("F_NiU_Hinterlegter SiBe", "nF_Hinterlegter SiBe"):
+        for cand in ("Hinterlegter_SiBe", "F_NiU_Hinterlegter SiBe", "nF_Hinterlegter SiBe"):
             if cand in results_full.columns:
                 results_full["Hinterlegter SiBe"] = results_full[cand]
                 break

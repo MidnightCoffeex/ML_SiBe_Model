@@ -1,324 +1,106 @@
-# AGENTS_MAKE_ML – Technische und fachliche Dokumentation
+# AGENTS_MAKE_ML – Technische und fachliche Dokumentation (Stand: Okt 2025)
 
-Diese Dokumentation beschreibt das Ziel, die Datenbasis, die Pipeline zur
-Merkmalsgewinnung (Feature Engineering), die Modelle, die Auswertung und die
-fachliche Motivation. Sie richtet sich an Leserinnen und Leser ohne tiefe
-Vorkenntnisse in KI/ML und erklärt, warum wir welche Schritte durchführen.
-Unklare fachliche Entscheidungen sind mit „#Ich frage den User#“ markiert.
+Diese Dokumentation beschreibt Ziel, Datenbasis, Pipeline (Feature Engineering), Modelle, Auswertung sowie die wichtigsten jüngsten Änderungen. Sie dient auch als Grundlage für die Ausarbeitung (Werdegang siehe `Update.md`).
 
 ---
 
-## 1. Zielsetzung und Problemkontext
+## 1. Zielsetzung
 
-- Ziel: Für jedes Teil (Material/Artikel) zu jedem Datum eine datenbasierte
-  Empfehlung für den Sicherheitsbestand (SiBe) bzw. den notwendigen
-  Zusatzpuffer (kein Stockout) abzuleiten.
-- Nutzen: Bessere Verfügbarkeit, weniger Stockouts, planbare Bestände, und
-  Unterstützung der Disposition mit nachvollziehbaren Signalen.
-- Kernidee: Wir generieren zunächst eine konsistente, tägliche Zeitreihe je
-  Teil (Bestände, Bedarfs-/Deckungsplanung, historischer SiBe). Darauf
-  trainieren wir Modelle (z. B. Gradient Boosting), die Zielgrößen wie
-  „zusätzlicher Bedarf zur Stockout-Vermeidung“ schätzen.
+- Ziel: Für jedes Teil einen stabilen, nachvollziehbaren Sicherheitsbestand (SiBe) ableiten.
+- Ansatz: Tägliche Zeitreihen je Teil, darauf ML‑Modelle (GB/XGB/LGBM) zur Schätzung eines halbjährlich konstanten Zielwerts.
+- Nutzen: Weniger Stockouts, stabilere Bestände, bessere Planbarkeit.
 
 ---
 
-## 2. Datenquellen und Verzeichnisstruktur
+## 2. Datenquellen & Struktur
 
-- Rohdaten („Rohdaten/“): CSV-Exporte aus operativen Systemen (Semikolon
-  getrennt, Encoding ISO-8859-1). Wichtigste Tabellen:
-  - Bestand: Momentaufnahmen mit Lagerbestand.
-  - Lagerbew: Bewegungen mit Zeitstempel (Bestandsverlauf).
-  - Dispo: Geplante Bedarfe (Abgänge) und Deckungen (Zugänge) mit Terminen.
-  - Teilestamm: Stammdaten inkl. „WBZ“ (Wiederbeschaffungszeit, Lead Time).
-  - SiBe: Aktuell hinterlegter Sicherheitsbestand (Stichtagebene).
-  - SiBeVerlauf: Historie der SiBe-Änderungen (neu: ein gemeinsamer Export je
-    Datum mit Spalten „Teil“, „Datum Änderung“, „aktiver SiBe“).
-- Begleitdatei: „Spaltenbedeutung.xlsx“ (Mapping, um relevante Spalten
-  robust zu identifizieren).
+- Rohdaten (`Rohdaten/`): Bestände (Stichtage), Bewegungen (Lagerbew), Disposition (Bedarf/Deckung), Teilestamm (inkl. WBZ), SiBe und SiBe‑Verlauf.
+- Spaltenmapping: `Spaltenbedeutung.xlsx` (robuste Zuordnung trotz Encoding/Benennungsvarianten).
 - Ergebnisverzeichnisse:
-  - Features/<Teil>/features.parquet|xlsx
-  - Modelle/<Teil oder ALL>/<Modelltyp>/<ID>/
-  - plots/<Teil oder ALL>/<Modelltyp>/<ID>/ (Diagnose-Grafiken und Exporte)
-
-Hinweis: Die Pipeline ist robust gegenüber kleineren Spaltenabweichungen und
-kodierungsbedingten Varianten (z. B. „Datum Änderung“ vs. „Datum �nderung“).
+  - `Features/<Teil>/features.parquet|xlsx`
+  - `Modelle/<Teil|ALL>/<Modelltyp>/<ID>/`
+  - `plots/<Teil|ALL>/<Modelltyp>/<ID>/`
+  - Test‑Ordner für Validierung: `GPT_Features_Test/`, `GPT_Pipeline_Test/`
 
 ---
 
 ## 3. Pipeline – Von Rohdaten zu Features
 
-### 3.1 Einlesen und Normalisierung
+### 3.1 Einlesen & Normalisierung
 
-- Erkennung der CSV-Trennzeichen (auto), Encoding ISO-8859-1.
-- Spaltenbereinigung (Trimmen, Umbenennen „Teil “ → „Teil“).
-- Dezimalzahlen mit Komma in Gleitkommazahlen umwandeln.
-- Filtern auf „Lagerort = 120“ (relevanter Lagerort für die Betrachtung).
-- Spaltenauswahl über „Spaltenbedeutung.xlsx“ und dataset-spezifische Logik.
+- Datum aus Dateinamen (`YYYYMMDD_*`), Encoding‑Toleranz, Dezimal‑Komma → Float.
+- Filter `Lagerort=120`.
+- SiBe‑Verlauf per asof‑Join (zeitlich korrekt wirksam ab Änderungsdatum).
 
-Begründung: Einheitliche, saubere und robuste Datenbasis ist Vorbedingung
-für sinnvolle ML-Features und vergleichbare Zeitreihen.
+### 3.2 Tägliche Reindexierung & Forward‑Fill
 
-### 3.2 Aggregation pro Dataset
+- Auch „ereignislose“ Tage werden explizit erzeugt (lückenlose Zeitachsen je Teil).
+- Zentrale Bestandsgrößen werden vorwärtsgetragen (Forward‑Fill), z. B. `EoD_Bestand_noSiBe` als Basis.
+- Nachfrage‑Features (DemandMean/Max) werden für alle Tage konsistent neu berechnet.
 
-- Lagerbew: Zeitstempel → Tageslevel runden; pro (Teil, Tag) den letzten
-  Lagerbestand (End-of-Day) verwenden.
-- Dispo: Bedarfe („Bedarfsmenge“) und Deckungen („Deckungsmenge“) auf Tages-
-  level summieren; Netto = Deckung − Bedarf.
-- Bestand/Teilestamm: Stichtagswerte pro (Teil, Tag) übernehmen.
+### 3.3 EoD‑Logik & Dispo
 
-Begründung: Konsistente tägliche Zeitscheiben erleichtern die spätere
-Zusammenführung und vermeiden Doppellogik in den Modellen.
+- Vor Dispo‑Start: Messwerte (Lagerbew/Bestand) auf Tageslevel verdichtet.
+- Ab Dispo‑Start: Simulation End‑of‑Day via kumulierter Netto‑Bewegungen (Deckung – Bedarf).
 
-### 3.3 SiBeVerlauf – Historie korrekt anwenden
+### 3.4 Feature‑Gruppen
 
-- Alte Struktur: je Teil eine Datei, Spalten wie „AudEreignis-ZeitPkt“ und
-  „Im Sytem hinterlgeter SiBe“.
-- Neue Struktur: ein gemeinsamer Export je Datum mit „Teil“, „Datum Änderung“,
-  „aktiver SiBe“.
-- Vereinheitlichung: Spalten werden robust erkannt (auch bei Zeichensatz-
-  varianten) und auf ein gemeinsames Schema gemappt.
-- Zeitliche Anwendung (Intervall-Logik):
-  - Die Änderungszeitpunkte pro Teil werden chronologisch sortiert.
-  - Für jedes Feature-Datum wird der zuletzt gültige Änderungswert mittels
-    „asof-Join (direction=backward)“ zugewiesen.
-  - Vor dem ersten Eintrag gilt 0; nach dem letzten Eintrag gilt der letzte
-    Wert fortlaufend.
+- Immer enthalten (nicht abwählbar): `F_NiU_EoD_Bestand`, `F_NiU_Hinterlegter SiBe`, `EoD_Bestand_noSiBe`.
+- Nachfrage: `DemandMean_*`, `DemandMax_*` inkl. Varianten `log1p`, `z_`, `robz`.
+- Flags & Stammdaten: `Flag_StockOut`, `WBZ_Days`.
+- Labels: `L_NiU_WBZ_BlockMinAbs` (Diagnose), `LABLE_HalfYear_Target` (Training).
+- Lag‑Features (neu):
+  - Punkt‑Lags: `Lag_EoD_Bestand_noSiBe_{7Tage,28Tage,wbzTage,2xwbzTage}` = Wert genau vor X Tagen.
+  - Mittel‑Lags: `Lag_EoD_Bestand_noSiBe_mean_{...}` = rückblickendes Fenster (ohne heutigen Tag).
 
-Begründung: Genau das bildet die Realität ab: Ein geänderter SiBe gilt ab dem
-Änderungsdatum, bis ein neuer Wert eingetragen wird.
+### 3.5 Selektiver Build (GUI)
 
-### 3.4 Bestandsbasis und EoD-Simulation
+- `scripts/build_features_gui.py`: Checkboxen für Features/Labels; Abhängigkeiten werden automatisch berechnet. Nicht ausgewählte Basiswerte werden, sofern nur als Abhängigkeit benötigt, im Output unterdrückt.
+- „Ereignislose“ Tage sowie Recompute der Demand‑Features sind integriert.
 
-- „Baseline“: Zum Start der Dispo-Zeit (erstes Dispo-Datum) wird, wenn möglich,
-  der zuletzt bekannte Lagerbew-/Bestand-Wert als Ausgangsbestand verwendet.
-- EoD_Bestand: Vor Dispo-Start übernehmen wir gemessene Lagerbew-Werte; ab
-  Dispo-Start simulieren wir den End-of-Day-Bestand: Baseline + kumulierte
-  Netto-Bewegungen („cum_net“) aus Dispo.
+### 3.6 Test‑Set & Schema
 
-Begründung: So verbinden wir tatsächlichen Verlauf und Planungen, um für jeden
-Tag einen plausiblen Bestand zu haben.
-
-### 3.5 Abgeleitete Features
-
-- nF_EoD_Bestand (nur Anzeige/Plots, nicht fürs Training): End-of-Day-Bestand
-  (siehe oben); als „nF_“ gekennzeichnet, damit es nicht ins Modell fließt.
-- nF_Hinterlegter SiBe (nur Anzeige/Plots): Aus SiBeVerlauf abgeleiteter,
-  gültiger SiBe je Tag.
-- EoD_Bestand_noSiBe: nF_EoD_Bestand − nF_Hinterlegter SiBe.
-- Flag_StockOut: 1, wenn EoD_Bestand_noSiBe ≤ 0, sonst 0.
-- WBZ_Days: Wiederbeschaffungszeit (Tage) aus Teilestamm (falls vorhanden).
-- Rollierende Verbrauchsmerkmale aus EoD_Bestand_noSiBe:
-  - DemandMean_*, DemandMax_* mit Fenstern in Relation zur WBZ (100%, 66%,
-    50%, 25%) – basierend auf gelaggten Differenzen, um Zukunfts-Leakage zu
-    vermeiden.
-
-Bewusst entfernt (fachlich/ML-bedingt):
-- DaysToEmpty: nutzte zukünftige Information → Future-Leakage-Risiko.
-- BestandDelta_7T: geringes/instabiles Signal.
-
-Begründung: Features sollen robust, kausal plausibel und ohne Zukunftswissen
-sein.
-
-### 3.6 Labels (Zielgrößen)
-
-- _LABLE_StockOut_MinAdd (behalten): Schätzt die zusätzliche Menge, die
-  benötigt wäre, um innerhalb eines vorausschauenden Fensters (Lookahead)
-  Stockouts zu vermeiden.
-  - Lookahead ≈ 1.25 × WBZ (#Ich frage den User#: Warum genau 1.25?)
-  - Konstruktionsprinzip: Kombination aus „progressiver“ Annäherung an den
-    Stockout-Zeitpunkt und „rollierender“ Defizit-Summe über das Fenster.
-  - Interpretation: „Wie viel muss ich minimal addieren, um auf Sicht keine
-    Unterdeckung zu haben?“
-- Entfernte Labels: LABLE_SiBe_STD95, LABLE_SiBe_AvgMax, LABLE_SiBe_Percentile. _LABLE_StockOut_MinAdd bleibt als Hintergrundspalte erhalten (nicht f�rs Training). Gründe: begrenzter Zusatznutzen, teils nicht zur
-  Optimierung passend (MSE vs. Quantil), Gefahr der Zielunschärfe.
+- Der `Test_Set`‑Ordner liegt auf gleicher Ebene wie der gewählte Feature‑Ordner und spiegelt dessen Spaltenstruktur (identische Reihenfolge/Benennung) wider.
+- Die Trennung in Train/Test erfolgt je Teil dynamisch am Dispo‑Start.
 
 ---
 
-## 4. Training – Modelle und Splits
+## 4. Training
 
-- Feature-Selektion: Es werden ausschließlich numerische Prädiktoren genutzt;
-  „nF_*“ und Target-Spalten werden explizit ausgeschlossen.
-- Zeitreihen-Splitting (TimeSeriesSplit):
-  - Training/Validierung/Test sind zeitlich sortiert und nicht vermischt.
-  - Optionale CV über mehrere Folds möglich.
-- Modellfamilien:
-  - Gradient Boosting (scikit-learn)
-  - XGBoost (optional)
-  - LightGBM (optional)
-- Gewichte: Zeilen mit _LABLE_StockOut_MinAdd > 0 können höher gewichtet
-  werden (#Ich frage den User#: Welche Gewichtung ist fachlich gewünscht?).
-- ALL vs. Teil-spezifisch: Ein Modell über alle Teile (ALL) erfasst Muster
-  global; Teil-spezifische Modelle können individuelle Charakteristika besser
-  treffen (#Ich frage den User#: wann ALL vs. pro Teil einsetzen?).
-
-Begründung: Zeitbasierte Splits verhindern Datenleckage. GBMs sind starke,
-interpretierbare Baselines für strukturierte Daten.
+- Modelle: `gb` (sklearn Gradient Boosting), optional `xgb` (XGBoost), `lgbm` (LightGBM).
+- Ziel: `LABLE_HalfYear_Target` (halbjährlich konstante Empfehlung, abgeleitet aus `L_NiU_WBZ_BlockMinAbs`).
+- Gewichte: Schemata `none|blockmin|flag` plus Faktor (z. B. 5.0) per Prompt.
+- Splits: Zeitreihen‑konform, optional CV‑Splits.
+- Fortschritt: Optionaler Progress‑Balken parallel für `gb` via `--progress` oder Prompt.
 
 ---
 
-## 5. Evaluation – Messgrößen und Visualisierung
+## 5. Evaluierung
 
-- Standardmetriken: MAE, RMSE, R². Hinweis: MAPE ist bei Zielwert 0 nicht
-  zuverlässig; idealerweise zusätzlich WAPE/SMAPE/MASE verwenden (#Ich frage den User#: Welche Metriken sollen offiziell berichtet werden?).
-- Service-Level-bezogene Metriken (empfohlen):
-  - Anteil Tage ohne Unterdeckung (EoD_Bestand_noSiBe + Prognose ≥ 0)
-  - Summe/Max/Serienlänge von Unterdeckungen (Praxisrelevanz)
-- Plots/Exports:
-  - Actual vs. Predicted (Scatter, Zeitverlauf)
-  - Zeitreihen-Overlays: EoD_Bestand_noSiBe, vorhergesagte Puffer, und Summe
-  - Trainingshistorie (sofern Modell verfügbar)
-
-Begründung: Neben klassischen Fehlermaßen zeigen servicelevel-nahe Kennzahlen,
-ob das betriebliche Ziel erreicht wird.
+- Metriken: MAE, RMSE, R², MAPE (mit Vorsicht bei Ziel=0). Ergänzende service‑nahe Kennzahlen möglich.
+- Robuste Anzeige‑Spalten: Toleranz bei `Hinterlegter SiBe` vs. `Hinterlegter_SiBe`.
+- Exporte: `*_predictions.csv|xlsx` und Plots (PNG/HTML) unter `plots/...`.
 
 ---
 
-## 6. Bedienung – Schritt für Schritt
+## 6. Bedienung (Kurz)
 
-1) Features erzeugen
-
-```bash
-python scripts/build_features.py --input Rohdaten --output Features
-```
-- Fragt Pfade ggf. interaktiv ab. Pro Teil entsteht „features.parquet“ und
-  „features.xlsx“.
-
-2) Modelle trainieren (Beispiel: ALL, GBM)
-
-```bash
-python scripts/train.py --data Features --part ALL \
-  --model-dir Modelle --models gb \
-  --targets _LABLE_StockOut_MinAdd \
-  --n_estimators 600 --learning_rate 0.05 --max_depth 4 --subsample 0.8
-```
-
-3) Evaluieren (Beispiel: Teil 1100831 mit ALL‑Modell)
-
-```bash
-python scripts/evaluate.py --features Features --part ALL \
-  --model-dir Modelle --model-type gb --model-id 1 \
-  --targets _LABLE_StockOut_MinAdd --plots plots
-```
-- Bei „part=ALL“ fragt das Script intern nach der konkreten Teilnummer für die
-  Auswertung.
+1) Feature‑Build (GUI): `python scripts/build_features_gui.py`
+2) Train: `python scripts/train.py` (interaktiv; optional `--progress`)
+3) Evaluate: `python scripts/evaluate.py` (interaktiv)
 
 ---
 
-## 7. Qualitätsregeln und Entscheidungen
+## 7. Qualitätsregeln
 
-- Keine Zukunfts-Leakage: Rollierende Features nutzen nur Vergangenheitswerte
-  (via shift/lag). SiBe-Verlauf wird zeitlich korrekt per asof-Join angewendet.
-- „nF_*“‑Spalten: Für Transparenz/Plots sichtbar, aber kein Input fürs Modell.
-- Robustheit: Toleranz gegenüber abweichenden Spaltennamen/Encodings.
-- Trennung Ziel/Diagnose: Training auf definierten Labels; Vergleich gegen
-  „(nF_)Hinterlegter SiBe“ nur als Diagnose – nicht als Trainingsziel.
+- Keine Zukunfts‑Leakage (rollierende Features nur aus Vergangenheit, SiBe‑asof‑Join).
+- NiU‑Spalten sind reine Anzeige/Diagnose und werden nicht als Features genutzt.
+- Identisches Schema zwischen Features und Test‑Set.
 
 ---
 
-## 8. Bekannte Grenzen und typische Fehlerquellen
+## 8. Grenzen & Hinweise
 
-- MAPE bei vielen Nullen im Ziel wenig aussagekräftig → alternative Kennzahlen
-  nutzen.
-- Baseline (Startbestand) beeinflusst EoD-Simulation: Ist die letzte Messung
-  zu weit vom Dispo-Beginn entfernt, kann das Niveau verschoben sein.
-- ALL‑Modelle können teil-spezifische Besonderheiten verwässern; umgekehrt
-  leiden Teilmodelle unter Datenknappheit.
+- Aktuell `Lagerort=120` fix; Dateinamen benötigen Datum `YYYYMMDD`.
+- Lange Zeiträume können ressourcenintensiv sein → selektiver Build oder Teilmengen.
 
----
-
-## 9. Weiterentwicklung (Empfehlungen)
-
-- Metriken: WAPE/SMAPE/MASE und Service-Level-Kurven in den Standard-Report.
-- Modelle: Für quantilartige Ziele (z. B. p90/p95‑Puffer) Quantil‑Loss
-  einsetzen; Early Stopping mit zeitlichen Validierungsfenstern.
-- Features: Kalendermerkmale (Wochentag, Monat, Quartal, Feiertage), Trend-
-  und Volatilitätsmerkmale für Dispo‑Qualität.
-- Backtesting: Mehrere rollierende Testfenster (Mittelwert + Streuung der
-  Kennzahlen) zur Stabilitätsaussage.
-
----
-
-## 10. Offene fachliche Punkte – bitte klären
-
-- Faktor 1.25 × WBZ für Lookahead-Fenster: #Ich frage den User#
-- Gewichtung von Zeilen mit Stockout‑Nähe (z. B. 5x): #Ich frage den User#
-- Sollen „Hinterlegter SiBe“‑Werte in die Modelle einfließen oder nur als
-  Diagnose dienen? (Derzeit nur Diagnose über nF_): #Ich frage den User#
-- Bevorzugtes Zielkriterium im Betrieb: Service-Level, Kostenfunktion
-  (Holding vs. Stockout‑Penalty) oder gemischte Zielfunktion? #Ich frage den User#
-- Wann ALL-Modelle vs. Teilmodelle? Schwelle (Datenmenge/Volatilität)?
-  #Ich frage den User#
-
----
-
-## 11. Glossar
-
-- SiBe (Sicherheitsbestand): Bestandspuffer zur Abdeckung von Unsicherheit.
-- Stockout: Bestand fällt (unter Berücksichtigung des SiBe) auf ≤ 0.
-- WBZ (Wiederbeschaffungszeit): Zeit vom Auslösen bis zum Eintreffen der Ware.
-- Feature: Eingangsgröße eines Modells (Prädiktor).
-- Label: Zielgröße, die das Modell lernen soll.
-- asof-Join: Verknüpfung, die für jeden Zeitpunkt den zuletzt früheren Wert
-  übernimmt (typisch für Zeitreihenhistorien).
-
----
-
-## 12. Technische Umgebung (Kurz)
-
-- Python 3.11, pandas, NumPy, scikit‑learn, matplotlib, pyarrow, openpyxl,
-  plotly; optional: xgboost, lightgbm.
-- Encoding: ISO‑8859‑1; Separator: auto; robustes Spalten‑Mapping.
-- Scripts: `build_features.py`, `train.py`, `evaluate.py`.
-
----
-
-Stand dieses Dokuments entspricht der aktuellen Pipeline-Logik mit
-zeitkorrekter Anwendung des SiBe‑Verlaufs und der Trennung von
-„nF_*“‑Spalten (nur Anzeige) und Modellfeatures.
-
-\n\n### Neues Label: LABLE_WBZ_NegBlockSum\n\n- Ziel: Im WBZ-Fenster [t, t+WBZ) alle zusammenh�ngenden negativen Bl�cke in EoD_Bestand_noSiBe betrachten.\n- F�r jeden Block wird das Minimum (st�rkste Unterdeckung) einmalig herangezogen.\n- Das Label ist die Summe der Absolutbetr�ge dieser Block-Minima innerhalb des Fensters (positiver Wert).\n- Motivation: Mehrere getrennte Engp�sse im Planhorizont sollen additiv abgesichert werden; WBZ steuert die zeitliche Reichweite der Entscheidung.\n
-
-## Faktorisierung (WBZ, Bedarfe, Schwankung) � aktueller Stand
-
-In der aktuellen Umsetzung wird die halbj�hrliche Empfehlung (Label) in zwei Schritten gebildet:
-
-1) Basis je Halbjahr (L_NiU_HalfYear_Base):
-   - Aus dem Diagnose-Label L_NiU_WBZ_BlockMinAbs (gr��ter negativer Ausschlag innerhalb eines WBZ-Fensters) wird pro Halbjahres-Abschnitt der maximale Wert als Basis gew�hlt. Das ergibt einen stabilen, konservativen Ausgangswert.
-
-2) Marginale Faktoren (fensterweise konstant, moderat gekappt):
-   - WBZ-Faktor f_wbz (l�ngere WBZ ? etwas mehr Puffer)
-     - WBZ_eff = max(WBZ_Days, 14)
-     - f_wbz = 0.00 bei WBZ_eff = 28
-     - f_wbz steigt linear von 0.00 auf +0.10 f�r WBZ_eff 29�84
-     - f_wbz = +0.20 bei WBZ_eff = 85
-   - Frequenz-Faktor f_freq (h�ufige Entnahmen ? etwas mehr Puffer)
-     - Nachfragefolge: demand_t = max(0, EoD_noSiBe_{t-1} - EoD_noSiBe_t)
-     - Ereignisse im Fenster: events_window = Anzahl(demand_t > 0)
-     - Fensterl�nge: window_days (Tage zwischen Fensterbeginn und -ende)
-     - Auf WBZ skaliert: est_events_wbz = events_window � (WBZ_eff / window_days)
-     - f_freq = 0.20 � log1p(est_events_wbz) / log1p(8), mit Kappung auf [0.00, 0.20]
-   - Volatilit�ts-Faktor f_vol (unruhige Entnahmemengen ? etwas mehr Puffer)
-     - Im Fenster: Mittelwert � und Standardabweichung s der Nachfrage; CV = s/� (falls � > 0)
-     - f_vol = 0.00 bei CV = 0.3
-     - f_vol steigt linear bis +0.20 bei CV = 0.8 (Kappung auf 0.20)
-   - Gesamtkappe: f_total = min(0.40, f_wbz + f_freq + f_vol)
-   - Finale Empfehlung je Halbjahr: LABLE_HalfYear_Target = L_NiU_HalfYear_Base � (1 + f_total)
-
-Weshalb so?
-- Stabilit�t: Ein Wert pro Halbjahr, keine sprunghaften Tages�nderungen.
-- Nachvollziehbarkeit: Die drei Faktoren sind klein, klar begr�ndet und gekappt (max. +40% in Summe), damit die Basis nicht �bersteuert wird.
-- Transparenz: Die berechneten Faktoren und die Basis werden als NiU-Spalten gespeichert (F_NiU_Factor_WBZ, F_NiU_Factor_Freq, F_NiU_Factor_Vol, L_NiU_HalfYear_Base) und nicht f�rs Training genutzt.
-
----
-
-## Nachtrag (Okt 2025)
-
-- SiBeVerlauf-Backfill: Vor der ersten Änderung wird für alle Tage strikt vor dem ersten Änderungsdatum – jedoch nicht älter als das früheste Lagerbew-Datum des Teils – der früheste Wert aus der Spalte "Alter_SiBe" verwendet. Ab dem ersten Änderungstag gilt wieder der aktive SiBe aus dem Verlauf.
-- ALL-Training: Alle Teile werden global zusammengeführt und nach Datum (und Teil) sortiert. Splits erfolgen an Tagesgrenzen (unique days), damit keine Zeilen desselben Tages in verschiedene Folds fallen.
-- Gewichtungen: Interaktiv wählbar in `scripts/train.py` (oder per `--weight_scheme/--weight_factor`).
-  - `none`: keine Gewichtung (1.0)
-  - `blockmin` (Standard): Zeilen mit `L_NiU_StockOut_MinAdd > 0` erhalten höheres Gewicht (z. B. 5.0)
-  - `flag`: Zeilen mit `Flag_StockOut == 1` erhalten höheres Gewicht
-- Evaluation: Im ersten Zeitreihen-Plot ist das tatsächliche Label (z. B. `LABLE_HalfYear_Target`) zusätzlich als mittel-hellgraue Linie zu sehen. Plot-Erzeugung nutzt ein nicht-interaktives Backend (Matplotlib Agg) und schließt Figuren, um Speicherfehler ("fail to allocate bitmap") zu vermeiden.
-- Neues Tool: `scripts/feature_toggle_gui.py` – GUI zum globalen (De)aktivieren von Spalten per Checkbox. Abgewählte Spalten werden zu `nF_<Name>` umbenannt (wirkt auf Parquet + Excel in allen Teil-Unterordnern).
-- Timeseries-Scope: wahlweise global (ein Modell über alle Teile) oder lokal (separates Modell je Teil, Reihenfolge nach Datum pro Teil). Auswahl interaktiv in scripts/train.py.

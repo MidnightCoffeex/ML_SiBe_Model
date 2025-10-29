@@ -374,9 +374,8 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             merged['Im Sytem hinterlgeter SiBe'] = pd.to_numeric(
                 merged['Im Sytem hinterlgeter SiBe'], errors='coerce'
             ).fillna(0)
-            # Backfill: For all dates strictly before the first change, and not earlier
-            # than the earliest Lagerbew date for this part, use the earliest Alter_SiBe.
-            # This leaves the first change date and all future dates to follow the active SiBe.
+            # Backfill: For all dates strictly before the first change, use the earliest Alter_SiBe.
+            # Der 'alte SiBe' gilt ab Serienstart bis zum ersten Änderungsdatum; danach gilt der aktive SiBe.
             if 'Alter_SiBe' in sibe.columns:
                 try:
                     first_change = sibe['Datum'].min()
@@ -387,17 +386,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                     first_change = None
                     alter_val = None
                 if first_change is not None and pd.notna(alter_val):
-                    # determine earliest Lagerbew date available for this part
-                    min_lb = None
-                    if 'Lagerbew' in data and not data['Lagerbew'].empty:
-                        try:
-                            min_lb = pd.to_datetime(data['Lagerbew']['Datum']).min()
-                        except Exception:
-                            min_lb = None
-                    if min_lb is None:
-                        # fallback: earliest date in the feature frame
-                        min_lb = pd.to_datetime(feat['Datum']).min()
-                    mask_range = (merged['Datum'] < first_change) & (merged['Datum'] >= min_lb)
+                    mask_range = (merged['Datum'] < first_change)
                     merged.loc[mask_range, 'Im Sytem hinterlgeter SiBe'] = float(alter_val)
             feat = merged
             feat.rename(columns={'Im Sytem hinterlgeter SiBe': 'Hinterlegter SiBe'}, inplace=True)
@@ -411,6 +400,9 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         if 'F_NiU_Hinterlegter SiBe' in feat.columns and 'Hinterlegter SiBe' not in feat.columns:
             feat['Hinterlegter SiBe'] = feat['F_NiU_Hinterlegter SiBe']
         feat['EoD_Bestand_noSiBe'] = feat['F_NiU_EoD_Bestand'] - feat['F_NiU_Hinterlegter SiBe']
+        # Neutral always-present columns for downstream usage
+        feat['EoD_Bestand'] = feat['F_NiU_EoD_Bestand']
+        feat['Hinterlegter_SiBe'] = feat['F_NiU_Hinterlegter SiBe']
         feat['Flag_StockOut'] = (feat['EoD_Bestand_noSiBe'] <= 0).astype(int)
 
         # (DaysToEmpty/BestandDelta_7T entfernt – nicht mehr Teil der Ausgabe)
@@ -751,10 +743,6 @@ def save_feature_folders_split(
             hist_df['F_NiU_Factor_Freq'] = f_freq_arr
             hist_df['F_NiU_Factor_Vol'] = f_vol_arr
             hist_df['LABLE_HalfYear_Target'] = lbl_halfyear
-            # Apply factors also to per-date BlockMinAbs
-            total_factor_arr = np.minimum(f_wbz_arr + f_freq_arr + f_vol_arr, 0.40)
-            hist_df['L_NiU_WBZ_BlockMinAbs'] = block_base * (1.0 + total_factor_arr)
-
         # Ensure identical column structure between hist_df and dispo_df
         all_cols = list(hist_df.columns)
         for c in all_cols:
@@ -786,6 +774,415 @@ def save_feature_folders_split(
                 pass
         else:
             _save_parquet_or_csv(dispo_df, part_dir_t / 'features.parquet')
+
+
+###############################
+# Selective build (feature registry)
+###############################
+
+def _list_registry_features() -> list[str]:
+    """Names of selectable features exposed to the GUI."""
+    return [
+        # Transforms on EoD_noSiBe
+        'EoD_Bestand_noSiBe_log1p',
+        'EoD_Bestand_noSiBe_z_Teil',
+        'EoD_Bestand_noSiBe_robz_Teil',
+        'DeficitPos_log1p',
+        # Demand rollings (WBZ-relative facs like in legacy pipeline)
+        'DemandMean_100', 'DemandMax_100',
+        'DemandMean_66', 'DemandMax_66',
+        'DemandMean_50', 'DemandMax_50',
+        'DemandMean_25', 'DemandMax_25',
+        # Demand transforms
+        'DemandMean_100_log1p', 'DemandMean_100_z_Teil', 'DemandMean_100_robz_Teil',
+        'DemandMax_100_log1p', 'DemandMax_100_z_Teil', 'DemandMax_100_robz_Teil',
+        'DemandMean_66_log1p', 'DemandMean_66_z_Teil', 'DemandMean_66_robz_Teil',
+        'DemandMax_66_log1p', 'DemandMax_66_z_Teil', 'DemandMax_66_robz_Teil',
+        'DemandMean_50_log1p', 'DemandMean_50_z_Teil', 'DemandMean_50_robz_Teil',
+        'DemandMax_50_log1p', 'DemandMax_50_z_Teil', 'DemandMax_50_robz_Teil',
+        'DemandMean_25_log1p', 'DemandMean_25_z_Teil', 'DemandMean_25_robz_Teil',
+        'DemandMax_25_log1p', 'DemandMax_25_z_Teil', 'DemandMax_25_robz_Teil',
+        # Lag features (Punkt-Lags und Mittelwert-Lags)
+        # Punkt-Lags: Wert von EoD_noSiBe vor n Tagen
+        'Lag_EoD_Bestand_noSiBe_7Tage',
+        'Lag_EoD_Bestand_noSiBe_28Tage',
+        'Lag_EoD_Bestand_noSiBe_wbzTage',
+        'Lag_EoD_Bestand_noSiBe_2xwbzTage',
+        # Mittelwert-Lags: gleitender Mittelwert ueber n Tage (closed=left)
+        'Lag_EoD_Bestand_noSiBe_mean_7Tage',
+        'Lag_EoD_Bestand_noSiBe_mean_28Tage',
+        'Lag_EoD_Bestand_noSiBe_mean_wbzTage',
+        'Lag_EoD_Bestand_noSiBe_mean_2xwbzTage',
+    ]
+
+
+def _list_registry_labels() -> list[str]:
+    return [
+        'L_WBZ_BlockMinAbs',
+        'L_HalfYear_Target',
+    ]
+
+
+def list_available_feature_names() -> list[str]:
+    return _list_registry_features()
+
+
+def list_available_label_names() -> list[str]:
+    return _list_registry_labels()
+
+
+def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.DataFrame:
+    """Compute selected features on top of a core dataframe.
+
+    Core df must contain: Teil, Datum, EoD_Bestand_noSiBe, WBZ_Days.
+    """
+    out = df.copy()
+    # base series
+    eod = pd.to_numeric(out.get('EoD_Bestand_noSiBe'), errors='coerce')
+    wbz = pd.to_numeric(out.get('WBZ_Days'), errors='coerce').fillna(14)
+
+    # demand events from inventory deltas (legacy convention)
+    demand_series = (out['EoD_Bestand_noSiBe'].shift(1) - out['EoD_Bestand_noSiBe']).clip(lower=0).fillna(0)
+
+    # helpers
+    def _z_by_part(s: pd.Series) -> pd.Series:
+        if 'Teil' not in out.columns:
+            return s * 0
+        grp = out.groupby('Teil')[s.name]
+        mean = grp.transform('mean')
+        std = grp.transform('std').replace(0, np.nan)
+        return ((s - mean) / std).fillna(0)
+
+    def _robz_by_part(s: pd.Series) -> pd.Series:
+        if 'Teil' not in out.columns:
+            return s * 0
+        grp = out.groupby('Teil')[s.name]
+        med = grp.transform('median')
+        q75 = grp.transform(lambda x: x.quantile(0.75))
+        q25 = grp.transform(lambda x: x.quantile(0.25))
+        iqr = (q75 - q25).replace(0, np.nan)
+        return ((s - med) / iqr).fillna(0)
+
+    # --- EoD transforms ---
+    if 'EoD_Bestand_noSiBe_log1p' in selected:
+        out['EoD_Bestand_noSiBe_log1p'] = np.log1p(eod.clip(lower=0))
+    if 'EoD_Bestand_noSiBe_z_Teil' in selected:
+        s = pd.to_numeric(out['EoD_Bestand_noSiBe'], errors='coerce').fillna(0)
+        s.name = 'EoD_Bestand_noSiBe'
+        out['EoD_Bestand_noSiBe_z_Teil'] = _z_by_part(s)
+    if 'EoD_Bestand_noSiBe_robz_Teil' in selected:
+        s = pd.to_numeric(out['EoD_Bestand_noSiBe'], errors='coerce').fillna(0)
+        s.name = 'EoD_Bestand_noSiBe'
+        out['EoD_Bestand_noSiBe_robz_Teil'] = _robz_by_part(s)
+    if 'DeficitPos_log1p' in selected:
+        out['DeficitPos_log1p'] = np.log1p((-eod).clip(lower=0))
+
+    # --- Demand windows (WBZ-relative factors like legacy: 100,66,50,25) ---
+    fac_map = {
+        '100': 1.0,
+        '66': 2/3,
+        '50': 1/2,
+        '25': 1/4,
+    }
+    for key, fac in fac_map.items():
+        w = max(1, int(round((wbz if np.isscalar(wbz) else wbz.iloc[0]) * fac)))
+        mean_name = f'DemandMean_{key}'
+        max_name = f'DemandMax_{key}'
+        # prüfen, ob Base benötigt wird (Base oder ein Transform ist ausgewählt)
+        mean_trans = [f'{mean_name}_log1p', f'{mean_name}_z_Teil', f'{mean_name}_robz_Teil']
+        max_trans = [f'{max_name}_log1p', f'{max_name}_z_Teil', f'{max_name}_robz_Teil']
+        need_mean_base = (mean_name in selected) or any(t in selected for t in mean_trans)
+        need_max_base = (max_name in selected) or any(t in selected for t in max_trans)
+        # Base berechnen, wenn benötigt (auch wenn Base selbst nicht ausgewählt ist)
+        if need_mean_base and mean_name not in out.columns:
+            out[mean_name] = demand_series.shift(1).rolling(w, min_periods=1).mean()
+        if need_max_base and max_name not in out.columns:
+            out[max_name] = demand_series.shift(1).rolling(w, min_periods=1).max()
+        # transforms
+        if f'{mean_name}_log1p' in selected and mean_name in out.columns:
+            out[f'{mean_name}_log1p'] = np.log1p(pd.to_numeric(out[mean_name], errors='coerce').clip(lower=0))
+        if f'{max_name}_log1p' in selected and max_name in out.columns:
+            out[f'{max_name}_log1p'] = np.log1p(pd.to_numeric(out[max_name], errors='coerce').clip(lower=0))
+        if f'{mean_name}_z_Teil' in selected and mean_name in out.columns:
+            s = pd.to_numeric(out[mean_name], errors='coerce').fillna(0); s.name = mean_name
+            out[f'{mean_name}_z_Teil'] = _z_by_part(s)
+        if f'{max_name}_z_Teil' in selected and max_name in out.columns:
+            s = pd.to_numeric(out[max_name], errors='coerce').fillna(0); s.name = max_name
+            out[f'{max_name}_z_Teil'] = _z_by_part(s)
+        if f'{mean_name}_robz_Teil' in selected and mean_name in out.columns:
+            s = pd.to_numeric(out[mean_name], errors='coerce').fillna(0); s.name = mean_name
+            out[f'{mean_name}_robz_Teil'] = _robz_by_part(s)
+        if f'{max_name}_robz_Teil' in selected and max_name in out.columns:
+            s = pd.to_numeric(out[max_name], errors='coerce').fillna(0); s.name = max_name
+            out[f'{max_name}_robz_Teil'] = _robz_by_part(s)
+        # Wenn Base nicht explizit ausgewählt wurde, am Ende wieder entfernen
+        if need_mean_base and (mean_name not in selected) and mean_name in out.columns:
+            out.drop(columns=[mean_name], inplace=True)
+        if need_max_base and (max_name not in selected) and max_name in out.columns:
+            out.drop(columns=[max_name], inplace=True)
+
+    # --- Lags ---
+    # Punkt-Lags (reiner Rueckblick auf den Wert vor N Tagen)
+    if 'Lag_EoD_Bestand_noSiBe_7Tage' in selected:
+        out['Lag_EoD_Bestand_noSiBe_7Tage'] = eod.shift(7)
+    if 'Lag_EoD_Bestand_noSiBe_28Tage' in selected:
+        out['Lag_EoD_Bestand_noSiBe_28Tage'] = eod.shift(28)
+    if 'Lag_EoD_Bestand_noSiBe_wbzTage' in selected:
+        w = int(max(1, (wbz.iloc[0] if len(wbz) else 14)))
+        out['Lag_EoD_Bestand_noSiBe_wbzTage'] = eod.shift(w)
+    if 'Lag_EoD_Bestand_noSiBe_2xwbzTage' in selected:
+        w = int(max(1, (wbz.iloc[0] if len(wbz) else 14) * 2))
+        out['Lag_EoD_Bestand_noSiBe_2xwbzTage'] = eod.shift(w)
+    # Mittelwert-Lags (closed=left)
+    if 'Lag_EoD_Bestand_noSiBe_mean_7Tage' in selected:
+        out['Lag_EoD_Bestand_noSiBe_mean_7Tage'] = eod.shift(1).rolling(7, min_periods=1).mean()
+    if 'Lag_EoD_Bestand_noSiBe_mean_28Tage' in selected:
+        out['Lag_EoD_Bestand_noSiBe_mean_28Tage'] = eod.shift(1).rolling(28, min_periods=1).mean()
+    if 'Lag_EoD_Bestand_noSiBe_mean_wbzTage' in selected:
+        w = int(max(1, (wbz.iloc[0] if len(wbz) else 14)))
+        out['Lag_EoD_Bestand_noSiBe_mean_wbzTage'] = eod.shift(1).rolling(w, min_periods=1).mean()
+    if 'Lag_EoD_Bestand_noSiBe_mean_2xwbzTage' in selected:
+        w = int(max(1, (wbz.iloc[0] if len(wbz) else 14) * 2))
+        out['Lag_EoD_Bestand_noSiBe_mean_2xwbzTage'] = eod.shift(1).rolling(w, min_periods=1).mean()
+
+    return out
+
+
+def _compute_selected_labels(df: pd.DataFrame, selected: list[str]) -> pd.DataFrame:
+    out = df.copy()
+    if 'L_WBZ_BlockMinAbs' in selected:
+        # WBZ-window min of EoD_noSiBe (positive)
+        dates = pd.to_datetime(out['Datum'])
+        eod = pd.to_numeric(out['EoD_Bestand_noSiBe'], errors='coerce').fillna(0).to_numpy()
+        wbz = pd.to_numeric(out.get('WBZ_Days'), errors='coerce').fillna(14)
+        darr = dates.to_numpy()
+        block = np.zeros(len(out), dtype=float)
+        for i in range(len(out)):
+            h = int(max(1, round(wbz.iloc[i] if len(wbz) else 14)))
+            end = darr[i] + np.timedelta64(h, 'D')
+            mask = (darr >= darr[i]) & (darr < end)
+            y = eod[mask]
+            mmin = float(np.nanmin(y)) if y.size else 0.0
+            block[i] = max(0.0, -mmin)
+        # optional Faktoren (wie im Hauptpfad), grob angenähert per Frequenz/Volatilität
+        # (bei Bedarf weiter verfeinern)
+        out['L_WBZ_BlockMinAbs'] = block
+    if 'L_HalfYear_Target' in selected:
+        # Ableitung aus vorhandenem Label, falls vorhanden
+        if 'LABLE_HalfYear_Target' in out.columns:
+            out['L_HalfYear_Target'] = pd.to_numeric(out['LABLE_HalfYear_Target'], errors='coerce')
+    return out
+
+
+def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
+    """Lightweight core build: only keys, core stocks, WBZ, and SiBe history.
+
+    Returns: part -> core dataframe with at least
+      Teil, Datum, F_NiU_EoD_Bestand, F_NiU_Hinterlegter SiBe, EoD_Bestand_noSiBe, WBZ_Days
+    """
+    column_map = _load_column_map(xlsx_path)
+    tables = load_all_tables(raw_dir, column_map)
+    # aggregate
+    agg_tables: Dict[str, pd.DataFrame] = {}
+    for name, df in tables.items():
+        if name == 'Lagerbew':
+            agg_tables[name] = _prepare_lagerbew(df)
+        elif name == 'Dispo':
+            agg_tables[name] = _prepare_dispo(df)
+        elif name == 'SiBeVerlauf':
+            df_s = df.copy()
+            dchange = None
+            for c in df_s.columns:
+                if 'datum' in str(c).lower() and 'nderung' in str(c).lower():
+                    dchange = c; break
+            if dchange and 'AudEreignis-ZeitPkt' not in df_s.columns:
+                df_s.rename(columns={dchange: 'AudEreignis-ZeitPkt'}, inplace=True)
+            if 'aktiver SiBe' in df_s.columns and 'Im Sytem hinterlgeter SiBe' not in df_s.columns:
+                df_s.rename(columns={'aktiver SiBe': 'Im Sytem hinterlgeter SiBe'}, inplace=True)
+            if 'Alter_SiBe' not in df_s.columns:
+                for c in list(df_s.columns):
+                    if 'alter' in str(c).lower() and 'sibe' in str(c).lower():
+                        df_s.rename(columns={c: 'Alter_SiBe'}, inplace=True); break
+            agg_tables[name] = _aggregate_dataset(df_s, ['AudEreignis-ZeitPkt'], last_cols=['Im Sytem hinterlgeter SiBe', 'Alter_SiBe'])
+        elif name in {'Bestand', 'Teilestamm'}:
+            df2 = df.copy(); df2['Datum'] = df2['ExportDatum']
+            agg = {c: 'first' for c in df2.columns if c not in {'Teil','Datum','Dataset','ExportDatum'}}
+            agg_tables[name] = df2.groupby(['Teil','Datum'], as_index=False).agg(agg)
+
+    parts: set[str] = set()
+    for df in agg_tables.values():
+        parts.update(df['Teil'].astype(str).unique())
+
+    processed: dict[str, dict] = {}
+    for part in sorted(parts):
+        data: Dict[str, pd.DataFrame] = {}
+        for name, df in agg_tables.items():
+            part_df = df[df['Teil'].astype(str) == str(part)].copy()
+            if not part_df.empty:
+                data[name] = part_df
+        if not data:
+            continue
+        date_set: set[pd.Timestamp] = set()
+        first_dispo_date = None
+        if 'Lagerbew' in data:
+            data['Lagerbew']['Datum'] = pd.to_datetime(data['Lagerbew']['Datum'])
+            date_set.update(data['Lagerbew']['Datum'].unique())
+        if 'Dispo' in data:
+            data['Dispo']['Datum'] = pd.to_datetime(data['Dispo']['Datum'])
+            date_set.update(data['Dispo']['Datum'].unique())
+            first_dispo_date = data['Dispo']['Datum'].min()
+        baseline = 0.0; baseline_date = None
+        if first_dispo_date is not None and 'Lagerbew' in data:
+            lb_before = data['Lagerbew'][data['Lagerbew']['Datum'] <= first_dispo_date]
+            if not lb_before.empty:
+                last_lb = lb_before.sort_values('Datum').iloc[-1]
+                baseline = float(last_lb['Lagerbestand'])
+                baseline_date = last_lb['Datum']
+        if baseline_date is None and 'Bestand' in data:
+            best = data['Bestand'][['Datum','Bestand']].copy(); best['Datum'] = pd.to_datetime(best['Datum'])
+            if first_dispo_date is not None:
+                best_before = best[best['Datum'] <= first_dispo_date]
+                if not best_before.empty:
+                    last_best = best_before.sort_values('Datum').iloc[-1]
+                    baseline = float(last_best['Bestand']); baseline_date = last_best['Datum']
+            elif not best.empty:
+                last_best = best.sort_values('Datum').iloc[-1]
+                baseline = float(last_best['Bestand']); baseline_date = last_best['Datum']
+        if baseline_date is not None:
+            date_set.add(baseline_date)
+        if not date_set:
+            continue
+        # daily grid
+        full_days = pd.date_range(min(date_set), max(date_set), freq='D')
+        feat = pd.DataFrame({'Datum': full_days}); feat['Teil'] = part
+        # merge Lagerbew
+        if 'Lagerbew' in data:
+            lb = data['Lagerbew'][['Datum','Lagerbestand']]
+            feat = feat.merge(lb, on='Datum', how='left')
+        else:
+            feat['Lagerbestand'] = np.nan
+        if baseline_date is not None and feat.loc[feat['Datum']==baseline_date, 'Lagerbestand'].isna().all():
+            feat.loc[feat['Datum']==baseline_date, 'Lagerbestand'] = baseline
+        # merge dispo
+        if 'Dispo' in data:
+            dispo = data['Dispo'][['Datum','net','Bedarfsmenge']]
+            feat = feat.merge(dispo, on='Datum', how='left')
+            feat['net'] = feat['net'].fillna(0); feat['Bedarfsmenge'] = feat['Bedarfsmenge'].fillna(0)
+            feat['cum_net'] = 0.0
+            if first_dispo_date is not None:
+                mask = feat['Datum'] >= first_dispo_date
+                feat.loc[mask,'cum_net'] = feat.loc[mask,'net'].cumsum()
+        else:
+            feat['net'] = 0; feat['Bedarfsmenge'] = 0; feat['cum_net'] = 0
+        # EoD
+        if first_dispo_date is not None:
+            pre = feat['Datum'] < first_dispo_date
+            feat.loc[pre,'EoD_Bestand'] = pd.to_numeric(feat['Lagerbestand'], errors='coerce').ffill()
+            post = feat['Datum'] >= first_dispo_date
+            feat.loc[post,'EoD_Bestand'] = baseline + feat.loc[post,'cum_net']
+        else:
+            feat['EoD_Bestand'] = pd.to_numeric(feat['Lagerbestand'], errors='coerce').ffill()
+        feat['EoD_Bestand'] = pd.to_numeric(feat['EoD_Bestand'], errors='coerce').fillna(0)
+        # SiBe Verlauf (asof)
+        if 'SiBeVerlauf' in data:
+            sibe = data['SiBeVerlauf'][['Datum','Im Sytem hinterlgeter SiBe','Alter_SiBe']].copy()
+            sibe['Datum'] = pd.to_datetime(sibe['Datum'], errors='coerce').dt.floor('D'); sibe = sibe.dropna(subset=['Datum']).sort_values('Datum')
+            merged = pd.merge_asof(feat.sort_values('Datum'), sibe, on='Datum', direction='backward')
+            merged['Im Sytem hinterlgeter SiBe'] = pd.to_numeric(merged['Im Sytem hinterlgeter SiBe'], errors='coerce').fillna(0)
+            # Backfill vor erstem Änderungsdatum mit Alter_SiBe (falls vorhanden)
+            try:
+                first_change = sibe['Datum'].min()
+                alter_val = pd.to_numeric(
+                    sibe.loc[sibe['Datum'] == first_change, 'Alter_SiBe'], errors='coerce'
+                ).iloc[0]
+            except Exception:
+                first_change = None
+                alter_val = None
+            if first_change is not None and pd.notna(alter_val):
+                pre_mask = (merged['Datum'] < first_change)
+                merged.loc[pre_mask, 'Im Sytem hinterlgeter SiBe'] = float(alter_val)
+            feat = merged.rename(columns={'Im Sytem hinterlgeter SiBe': 'F_NiU_Hinterlegter SiBe'})
+        else:
+            feat['F_NiU_Hinterlegter SiBe'] = 0
+        feat['F_NiU_EoD_Bestand'] = feat['EoD_Bestand']
+        feat['Hinterlegter_SiBe'] = feat['F_NiU_Hinterlegter SiBe']
+        feat['EoD_Bestand_noSiBe'] = feat['EoD_Bestand'] - feat['Hinterlegter_SiBe']
+        feat['Flag_StockOut'] = (feat['EoD_Bestand_noSiBe'] <= 0).astype(int)
+        # WBZ from Teilestamm
+        wbz = None
+        if 'Teilestamm' in data:
+            w = data['Teilestamm']['WBZ'].dropna()
+            if not w.empty:
+                wbz = float(pd.to_numeric(w.iloc[0], errors='coerce'))
+        feat['WBZ_Days'] = wbz
+        processed[part] = {"df": feat, "first_dispo_date": first_dispo_date}
+    return processed
+
+
+def run_pipeline_selective(
+    raw_dir: str,
+    output_dir: str,
+    features_to_build: list[str],
+    labels_to_build: list[str],
+) -> None:
+    try:
+        default_xlsx = Path(__file__).resolve().parents[1] / 'Spaltenbedeutung.xlsx'
+    except Exception:
+        default_xlsx = Path('Spaltenbedeutung.xlsx')
+    core = _build_core_by_part(raw_dir, str(default_xlsx))
+    out_root = Path(output_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+    test_root = out_root.parent / f"{out_root.name}_Test"
+    test_root.mkdir(parents=True, exist_ok=True)
+    for part, bundle in core.items():
+        df = bundle["df"]
+        first_dispo_date = bundle.get("first_dispo_date")
+        if df.empty:
+            continue
+        df = df.sort_values('Datum').reset_index(drop=True)
+        # compute selected features/labels
+        df_feat = _compute_selected_features(df, features_to_build)
+        df_lab = _compute_selected_labels(df_feat, labels_to_build)
+        # final selection: locked + selected
+        locked = ['Teil', 'Datum', 'F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe', 'EoD_Bestand_noSiBe']
+        final_cols = [c for c in locked + features_to_build + labels_to_build if c in df_lab.columns]
+        out_full = df_lab[final_cols].copy()
+        # split into historical and dispo period per part
+        if isinstance(first_dispo_date, pd.Timestamp):
+            hist_df = out_full[out_full['Datum'] < first_dispo_date].copy()
+            dispo_df = out_full[out_full['Datum'] >= first_dispo_date].copy()
+        else:
+            hist_df = out_full.copy()
+            dispo_df = out_full.iloc[0:0].copy()
+
+        # write hist (features)
+        part_dir = out_root / str(part)
+        part_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            hist_df.to_parquet(part_dir / 'features.parquet', index=False)
+        except Exception:
+            hist_df.to_csv(part_dir / 'features.csv', index=False)
+        try:
+            hist_df.to_excel(part_dir / 'features.xlsx', index=False)
+        except Exception:
+            pass
+
+        # write dispo (test set) with identical schema
+        # ensure identical columns
+        for c in final_cols:
+            if c not in dispo_df.columns:
+                dispo_df[c] = np.nan
+        dispo_df = dispo_df[final_cols]
+        part_dir_t = test_root / str(part)
+        part_dir_t.mkdir(parents=True, exist_ok=True)
+        try:
+            dispo_df.to_parquet(part_dir_t / 'features.parquet', index=False)
+        except Exception:
+            dispo_df.to_csv(part_dir_t / 'features.csv', index=False)
+        try:
+            dispo_df.to_excel(part_dir_t / 'features.xlsx', index=False)
+        except Exception:
+            pass
 
 
 def run_pipeline(raw_dir: str, output_dir: str = 'Features') -> None:
