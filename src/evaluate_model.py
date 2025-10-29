@@ -80,7 +80,7 @@ def _evaluate_range(
     # WBZ-Days (robust gegenÃ¼ber NiU-Prefix)
     wbz_col = _resolve_col(results, "WBZ_Days")
     wbz_val = results.get(wbz_col).iloc[0] if wbz_col and not results.empty else None
-    wbz_txt = f" â€“ WBZ: {int(wbz_val)} Tage" if isinstance(wbz_val, (int, float)) and pd.notna(wbz_val) else ""
+    wbz_txt = f" | WBZ: {int(wbz_val)} Tage" if isinstance(wbz_val, (int, float)) and pd.notna(wbz_val) else ""
     heading = f"Teil {part_txt}{wbz_txt}" if part_txt else (f"WBZ{wbz_txt}" if wbz_txt else "")
     mae = mean_absolute_error(results[actual_col], results[pred_col])
     rmse = np.sqrt(mean_squared_error(results[actual_col], results[pred_col]))
@@ -111,7 +111,7 @@ def _evaluate_range(
         x=actual_col,
         y=pred_col,
         labels={actual_col: name_actual_sibe, pred_col: name_pred},
-        title=f"{heading} â€“ Aktueller SiBe vs. Vorschlag" if heading else "Aktueller SiBe vs. Vorschlag",
+        title=f"{heading} | Aktueller SiBe vs. Vorschlag" if heading else "Aktueller SiBe vs. Vorschlag",
     )
     fig.write_html(Path(output_dir) / f"{prefix}_actual_vs_pred.html")
 
@@ -421,5 +421,6 @@ if __name__ == "__main__":
 
     target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
     run_evaluation(args.data, args.model, target_list, args.plots, args.raw, model_type=args.model_type)
+
 
 

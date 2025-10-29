@@ -1,4 +1,4 @@
-import os
+﻿import os
 import re
 from pathlib import Path
 from typing import Dict, List
@@ -92,15 +92,15 @@ def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[st
         # For SiBeVerlauf we now allow new unified export schema
         if dataset == 'SiBeVerlauf':
             # Prefer explicit selection to ensure required columns survive
-            sibe_candidates = ['Teil', 'AudEreignis-ZeitPkt', 'Datum Änderung', 'Im Sytem hinterlgeter SiBe', 'aktiver SiBe']
-            # Be robust to encoding variations like 'Datum �nderung'
+            sibe_candidates = ['Teil', 'AudEreignis-ZeitPkt', 'Datum Ã„nderung', 'Im Sytem hinterlgeter SiBe', 'aktiver SiBe']
+            # Be robust to encoding variations like 'Datum ï¿½nderung'
             colmap = {c: c for c in df.columns}
-            # find a column that looks like 'Datum Änderung'
+            # find a column that looks like 'Datum Ã„nderung'
             for c in df.columns:
                 cs = str(c)
                 lcs = cs.lower()
-                if 'datum' in lcs and 'nderung' in lcs and 'änder' in lcs or 'nd' in lcs:
-                    colmap['Datum Änderung'] = c
+                if 'datum' in lcs and 'nderung' in lcs and 'Ã¤nder' in lcs or 'nd' in lcs:
+                    colmap['Datum Ã„nderung'] = c
                 if 'aktiver' in lcs and 'sibe' in lcs and 'im sytem' not in lcs:
                     colmap['aktiver SiBe'] = c
             keep_cols = []
@@ -220,7 +220,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         elif name == 'SiBeVerlauf':
             df_s = df.copy()
             # Unify new schema to legacy names so downstream stays stable
-            # tolerate columns like 'Datum �nderung'
+            # tolerate columns like 'Datum ï¿½nderung'
             dchange = None
             for c in df_s.columns:
                 lcs = str(c).lower()
@@ -238,9 +238,9 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                     if 'alter' in lcs and 'sibe' in lcs:
                         df_s.rename(columns={c: 'Alter_SiBe'}, inplace=True)
                         break
-            # ensure Teil exists; if not, try to derive from Primärschlüssel text
-            if 'Teil' not in df_s.columns and 'Primärschlüssel' in df_s.columns:
-                part = df_s['Primärschlüssel'].astype(str).str.extract(r'Teil\s+(\d+)')[0]
+            # ensure Teil exists; if not, try to derive from PrimÃ¤rschlÃ¼ssel text
+            if 'Teil' not in df_s.columns and 'PrimÃ¤rschlÃ¼ssel' in df_s.columns:
+                part = df_s['PrimÃ¤rschlÃ¼ssel'].astype(str).str.extract(r'Teil\s+(\d+)')[0]
                 df_s['Teil'] = part
             agg_tables[name] = _aggregate_dataset(
                 df_s,
@@ -252,6 +252,26 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             df['Datum'] = df['ExportDatum']
             agg = {c: 'first' for c in df.columns if c not in {'Teil', 'Datum', 'Dataset', 'ExportDatum'}}
             agg_tables[name] = df.groupby(['Teil', 'Datum'], as_index=False).agg(agg)
+        elif name == 'TeileWert':
+            df_tw = df.copy()
+            # Versuche die Spalte fÃ¼r Materialpreis zu erkennen
+            price_col = None
+            for c in df_tw.columns:
+                lcs = str(c).lower()
+                if 'dpr' in lcs and 'material' in lcs and 'var' in lcs:
+                    price_col = c
+                    break
+            if price_col is None:
+                for c in df_tw.columns:
+                    if 'material' in str(c).lower():
+                        price_col = c
+                        break
+            if price_col is not None:
+                df_tw = df_tw[['Teil', 'ExportDatum', price_col]].copy()
+                df_tw.rename(columns={price_col: 'Price_Material_var', 'ExportDatum': 'Datum'}, inplace=True)
+                df_tw['Datum'] = pd.to_datetime(df_tw['Datum'], errors='coerce').dt.floor('D')
+                df_tw = df_tw.dropna(subset=['Datum'])
+                agg_tables[name] = df_tw.groupby(['Teil', 'Datum'], as_index=False)['Price_Material_var'].last()
         else:
             continue
 
@@ -375,7 +395,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 merged['Im Sytem hinterlgeter SiBe'], errors='coerce'
             ).fillna(0)
             # Backfill: For all dates strictly before the first change, use the earliest Alter_SiBe.
-            # Der 'alte SiBe' gilt ab Serienstart bis zum ersten Änderungsdatum; danach gilt der aktive SiBe.
+            # Der 'alte SiBe' gilt ab Serienstart bis zum ersten Ã„nderungsdatum; danach gilt der aktive SiBe.
             if 'Alter_SiBe' in sibe.columns:
                 try:
                     first_change = sibe['Datum'].min()
@@ -393,10 +413,17 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         else:
             feat['Hinterlegter SiBe'] = 0
 
+        # Materialpreis asof-join (falls vorhanden)
+        if 'TeileWert' in data:
+            tw = data['TeileWert'][['Datum', 'Price_Material_var']].copy()
+            if not tw.empty:
+                tw = tw.dropna(subset=['Datum']).sort_values('Datum')
+                feat = pd.merge_asof(feat.sort_values('Datum'), tw, on='Datum', direction='backward')
+
         # rename display-only (no-feature) columns and compute training series
         feat.rename(columns={'EoD_Bestand': 'F_NiU_EoD_Bestand'}, inplace=True)
         feat.rename(columns={'Hinterlegter SiBe': 'F_NiU_Hinterlegter SiBe'}, inplace=True)
-        # Für Auswertung/Plots zusätzlich eine nicht-NiU-Kopie behalten
+        # FÃ¼r Auswertung/Plots zusÃ¤tzlich eine nicht-NiU-Kopie behalten
         if 'F_NiU_Hinterlegter SiBe' in feat.columns and 'Hinterlegter SiBe' not in feat.columns:
             feat['Hinterlegter SiBe'] = feat['F_NiU_Hinterlegter SiBe']
         feat['EoD_Bestand_noSiBe'] = feat['F_NiU_EoD_Bestand'] - feat['F_NiU_Hinterlegter SiBe']
@@ -405,7 +432,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         feat['Hinterlegter_SiBe'] = feat['F_NiU_Hinterlegter SiBe']
         feat['Flag_StockOut'] = (feat['EoD_Bestand_noSiBe'] <= 0).astype(int)
 
-        # (DaysToEmpty/BestandDelta_7T entfernt – nicht mehr Teil der Ausgabe)
+        # (DaysToEmpty/BestandDelta_7T entfernt â€“ nicht mehr Teil der Ausgabe)
 
         # WBZ from Teilestamm
         wbz = None
@@ -430,7 +457,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         )
         feat['L_NiU_StockOut_MinAdd'] = rolling
 
-        # Neues Label: größter negativer Ausschlag innerhalb WBZ-Fenster (als positiver Wert)
+        # Neues Label: grÃ¶ÃŸter negativer Ausschlag innerhalb WBZ-Fenster (als positiver Wert)
         # LABLE_WBZ_BlockMinAbs = max(0, -min(EoD_Bestand_noSiBe im Fenster))
         feat = feat.sort_values('Datum').reset_index(drop=True)
         date_list = pd.to_datetime(feat['Datum']).tolist()
@@ -439,7 +466,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         for i in range(len(feat)):
             start = date_list[i]
             end = start + pd.Timedelta(days=int(lead_time))
-            # Fenstermaske über Index, da date_list eine Liste ist
+            # Fenstermaske Ã¼ber Index, da date_list eine Liste ist
             y_vals = []
             for k in range(i, len(feat)):
                 if date_list[k] < end:
@@ -453,26 +480,27 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         block_base = lbl_block.copy()
 
         # Halbjahres-Regel mit Faktoren: Fensterweise (ca. 6 Monate) denselben Wert setzen,
-        # und zwar den Höchstwert von L_NiU_WBZ_BlockMinAbs innerhalb des Fensters,
-        # moduliert durch marginale Faktoren (WBZ, Frequenz, Volatilität), jeweils gecappt.
+        # und zwar den HÃ¶chstwert von L_NiU_WBZ_BlockMinAbs innerhalb des Fensters,
+        # moduliert durch marginale Faktoren (WBZ, Frequenz, VolatilitÃ¤t), jeweils gecappt.
         lbl_halfyear_base = np.zeros(len(feat), dtype=float)
         lbl_halfyear = np.zeros(len(feat), dtype=float)
         f_wbz_arr = np.zeros(len(feat), dtype=float)
         f_freq_arr = np.zeros(len(feat), dtype=float)
         f_vol_arr = np.zeros(len(feat), dtype=float)
+        f_price_arr = np.zeros(len(feat), dtype=float)
         # Nachfrage-Ereignisse aus demand_series: Ereignis, wenn positive Nachfrage
         demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
         demand_series = pd.to_numeric(demand_series, errors='coerce').clip(lower=0).fillna(0).to_numpy()
         i = 0
         while i < len(feat):
             start = date_list[i]
-            # 6 Monate nach vorn; nächstes verfügbares Datum >= diesem Ziel
+            # 6 Monate nach vorn; nÃ¤chstes verfÃ¼gbares Datum >= diesem Ziel
             target = start + pd.DateOffset(months=6)
             # finde j: erstes Index mit Datum >= target
             j = i
             while j + 1 < len(feat) and date_list[j + 1] < target:
                 j += 1
-            # falls nächstes Datum hinter target existiert, auf dieses "aufrunden"
+            # falls nÃ¤chstes Datum hinter target existiert, auf dieses "aufrunden"
             if j + 1 < len(feat) and date_list[j] < target <= date_list[j + 1]:
                 j = j + 1
             # Fenster [i..j]
@@ -495,7 +523,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             est_events_wbz = events_window * (wbz_eff / window_days)
             f_freq = 0.20 * (np.log1p(est_events_wbz) / np.log1p(8.0))
             f_freq = float(min(0.20, max(0.0, f_freq)))
-            # Volatilität (CV) im Fenster
+            # VolatilitÃ¤t (CV) im Fenster
             dwin = demand_series[i:j + 1]
             mu = float(np.nanmean(dwin)) if dwin.size else 0.0
             sigma = float(np.nanstd(dwin)) if dwin.size else 0.0
@@ -506,7 +534,16 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 f_vol = 0.20
             else:
                 f_vol = 0.20 * (cv - 0.3) / (0.8 - 0.3)
-            total_factor = min(0.40, f_wbz + f_freq + f_vol)
+            # Preisfaktor (logarithmisch, nur reduzierend, Cap 0.10)
+            if 'Price_Material_var' in feat.columns:
+                p = pd.to_numeric(feat['Price_Material_var'], errors='coerce').fillna(0).astype(float).to_numpy()
+                p_log = np.log1p(np.maximum(0.0, p))
+                scale = np.nanpercentile(p_log[p_log > 0], 95) if np.any(p_log > 0) else 1.0
+                f_price = -0.10 * (p_log / scale) if scale > 0 else np.zeros_like(p_log)
+                f_price = float(np.clip(f_price[i], -0.10, 0.0)) if i < len(f_price) else 0.0
+            else:
+                f_price = 0.0
+            total_factor = min(0.40, max(0.0, f_wbz + f_freq + f_vol + f_price))
 
             base_val = window_max
             final_val = base_val * (1.0 + total_factor)
@@ -515,14 +552,16 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             f_wbz_arr[i:j + 1] = f_wbz
             f_freq_arr[i:j + 1] = f_freq
             f_vol_arr[i:j + 1] = f_vol
+            f_price_arr[i:j + 1] = f_price
             i = j + 1
         feat['L_NiU_HalfYear_Base'] = lbl_halfyear_base
         feat['F_NiU_Factor_WBZ'] = f_wbz_arr
         feat['F_NiU_Factor_Freq'] = f_freq_arr
         feat['F_NiU_Factor_Vol'] = f_vol_arr
-        feat['LABLE_HalfYear_Target'] = lbl_halfyear
-        # Faktoren auch auf den per-Date BlockMinAbs anwenden (gedeckelt auf 0.40 Gesamtfaktor)
-        total_factor_arr = np.minimum(f_wbz_arr + f_freq_arr + f_vol_arr, 0.40)
+        feat['F_NiU_Factor_Price'] = f_price_arr
+        feat['L_HalfYear_Target'] = lbl_halfyear
+        # Faktoren auch auf den per-Date BlockMinAbs anwenden (Clip 0..0.40)
+        total_factor_arr = np.clip(f_wbz_arr + f_freq_arr + f_vol_arr + f_price_arr, 0.0, 0.40)
         feat['L_NiU_WBZ_BlockMinAbs'] = block_base * (1.0 + total_factor_arr)
 
         # ----- rolling time features -----
@@ -598,7 +637,9 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 'F_NiU_Factor_WBZ',
                 'F_NiU_Factor_Freq',
                 'F_NiU_Factor_Vol',
-                'LABLE_HalfYear_Target',
+                'F_NiU_Factor_Price',
+                'L_HalfYear_Target',
+                'Price_Material_var',
             ]
             + [
                 c
@@ -665,7 +706,7 @@ def save_feature_folders_split(
             lbl_block = np.zeros(len(hist_df), dtype=float)
             for ii in range(len(hist_df)):
                 start = date_list[ii]
-                # WBZ pro Zeile (fallback 14→1 Tag für BlockMinAbs wie zuvor minimal 1)
+                # WBZ pro Zeile (fallback 14â†’1 Tag fÃ¼r BlockMinAbs wie zuvor minimal 1)
                 wbz_row = pd.to_numeric(hist_df.loc[ii, 'WBZ_Days'], errors='coerce') if 'WBZ_Days' in hist_df.columns else np.nan
                 lead_days = int(wbz_row) if pd.notna(wbz_row) and wbz_row > 0 else 1
                 end = start + pd.Timedelta(days=lead_days)
@@ -729,7 +770,16 @@ def save_feature_folders_split(
                     f_vol = 0.20
                 else:
                     f_vol = 0.20 * (cv - 0.3) / (0.8 - 0.3)
-                total_factor = min(0.40, f_wbz + f_freq + f_vol)
+                # Preisfaktor (logarithmisch, reduzierend, Cap 0.10)
+                if 'Price_Material_var' in hist_df.columns:
+                    p = pd.to_numeric(hist_df['Price_Material_var'], errors='coerce').fillna(0).astype(float).to_numpy()
+                    p_log = np.log1p(np.maximum(0.0, p))
+                    scale = np.nanpercentile(p_log[p_log > 0], 95) if np.any(p_log > 0) else 1.0
+                    f_price = -0.10 * (p_log / scale) if scale > 0 else np.zeros_like(p_log)
+                    f_price = float(np.clip(f_price[ii], -0.10, 0.0)) if ii < len(f_price) else 0.0
+                else:
+                    f_price = 0.0
+                total_factor = min(0.40, max(0.0, f_wbz + f_freq + f_vol + f_price))
                 base_val = window_max
                 final_val = base_val * (1.0 + total_factor)
                 lbl_halfyear_base[ii:jj + 1] = base_val
@@ -737,12 +787,30 @@ def save_feature_folders_split(
                 f_wbz_arr[ii:jj + 1] = f_wbz
                 f_freq_arr[ii:jj + 1] = f_freq
                 f_vol_arr[ii:jj + 1] = f_vol
+                # Preisfaktor im Fenster als konstanten Wert Ã¼bernehmen
+                if 'Price_Material_var' in hist_df.columns:
+                    f_price_win = np.full(jj - ii + 1, f_price, dtype=float)
+                else:
+                    f_price_win = np.zeros(jj - ii + 1, dtype=float)
+                # HÃ¤nge als temporÃ¤re Liste an; final wird volle LÃ¤nge vergeben
                 ii = jj + 1
             hist_df['L_NiU_HalfYear_Base'] = lbl_halfyear_base
             hist_df['F_NiU_Factor_WBZ'] = f_wbz_arr
             hist_df['F_NiU_Factor_Freq'] = f_freq_arr
             hist_df['F_NiU_Factor_Vol'] = f_vol_arr
-            hist_df['LABLE_HalfYear_Target'] = lbl_halfyear
+            # FÃ¼r Konsistenz: Preisfaktor pro Zeile berechnen (erneut, robust gegen Fenstergrenzen)
+            if 'Price_Material_var' in hist_df.columns:
+                p = pd.to_numeric(hist_df['Price_Material_var'], errors='coerce').fillna(0).astype(float).to_numpy()
+                p_log = np.log1p(np.maximum(0.0, p))
+                scale = np.nanpercentile(p_log[p_log > 0], 95) if np.any(p_log > 0) else 1.0
+                f_price_arr = -0.10 * (p_log / scale) if scale > 0 else np.zeros_like(p_log)
+                f_price_arr = np.clip(f_price_arr, -0.10, 0.0)
+            else:
+                f_price_arr = np.zeros(len(hist_df), dtype=float)
+            hist_df['F_NiU_Factor_Price'] = f_price_arr
+            # Finales Target mit Gesamtfaktor (Clip 0..0.40)
+            total_arr = np.clip(f_wbz_arr + f_freq_arr + f_vol_arr + f_price_arr, 0.0, 0.40)
+            hist_df['L_HalfYear_Target'] = lbl_halfyear_base * (1.0 + total_arr)
         # Ensure identical column structure between hist_df and dispo_df
         all_cols = list(hist_df.columns)
         for c in all_cols:
@@ -783,6 +851,8 @@ def save_feature_folders_split(
 def _list_registry_features() -> list[str]:
     """Names of selectable features exposed to the GUI."""
     return [
+        # Materialpreis (direkt aus TeileWert)
+        'Price_Material_var',
         # Transforms on EoD_noSiBe
         'EoD_Bestand_noSiBe_log1p',
         'EoD_Bestand_noSiBe_z_Teil',
@@ -888,12 +958,12 @@ def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.Data
         w = max(1, int(round((wbz if np.isscalar(wbz) else wbz.iloc[0]) * fac)))
         mean_name = f'DemandMean_{key}'
         max_name = f'DemandMax_{key}'
-        # prüfen, ob Base benötigt wird (Base oder ein Transform ist ausgewählt)
+        # prÃ¼fen, ob Base benÃ¶tigt wird (Base oder ein Transform ist ausgewÃ¤hlt)
         mean_trans = [f'{mean_name}_log1p', f'{mean_name}_z_Teil', f'{mean_name}_robz_Teil']
         max_trans = [f'{max_name}_log1p', f'{max_name}_z_Teil', f'{max_name}_robz_Teil']
         need_mean_base = (mean_name in selected) or any(t in selected for t in mean_trans)
         need_max_base = (max_name in selected) or any(t in selected for t in max_trans)
-        # Base berechnen, wenn benötigt (auch wenn Base selbst nicht ausgewählt ist)
+        # Base berechnen, wenn benÃ¶tigt (auch wenn Base selbst nicht ausgewÃ¤hlt ist)
         if need_mean_base and mean_name not in out.columns:
             out[mean_name] = demand_series.shift(1).rolling(w, min_periods=1).mean()
         if need_max_base and max_name not in out.columns:
@@ -915,7 +985,7 @@ def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.Data
         if f'{max_name}_robz_Teil' in selected and max_name in out.columns:
             s = pd.to_numeric(out[max_name], errors='coerce').fillna(0); s.name = max_name
             out[f'{max_name}_robz_Teil'] = _robz_by_part(s)
-        # Wenn Base nicht explizit ausgewählt wurde, am Ende wieder entfernen
+        # Wenn Base nicht explizit ausgewÃ¤hlt wurde, am Ende wieder entfernen
         if need_mean_base and (mean_name not in selected) and mean_name in out.columns:
             out.drop(columns=[mean_name], inplace=True)
         if need_max_base and (max_name not in selected) and max_name in out.columns:
@@ -964,7 +1034,7 @@ def _compute_selected_labels(df: pd.DataFrame, selected: list[str]) -> pd.DataFr
             y = eod[mask]
             mmin = float(np.nanmin(y)) if y.size else 0.0
             block[i] = max(0.0, -mmin)
-        # optional Faktoren (wie im Hauptpfad), grob angenähert per Frequenz/Volatilität
+        # optional Faktoren (wie im Hauptpfad), grob angenÃ¤hert per Frequenz/VolatilitÃ¤t
         # (bei Bedarf weiter verfeinern)
         out['L_WBZ_BlockMinAbs'] = block
     if 'L_HalfYear_Target' in selected:
@@ -1008,6 +1078,18 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
             df2 = df.copy(); df2['Datum'] = df2['ExportDatum']
             agg = {c: 'first' for c in df2.columns if c not in {'Teil','Datum','Dataset','ExportDatum'}}
             agg_tables[name] = df2.groupby(['Teil','Datum'], as_index=False).agg(agg)
+        elif name == 'TeileWert':
+            df_tw = df.copy()
+            price_col = None
+            for c in df_tw.columns:
+                if 'material' in str(c).lower() and ('dpr' in str(c).lower() or 'preis' in str(c).lower() or 'wert' in str(c).lower()):
+                    price_col = c; break
+            if price_col is not None:
+                df_tw = df_tw[['Teil','ExportDatum',price_col]].copy()
+                df_tw.rename(columns={price_col:'Price_Material_var','ExportDatum':'Datum'}, inplace=True)
+                df_tw['Datum'] = pd.to_datetime(df_tw['Datum'], errors='coerce').dt.floor('D')
+                df_tw = df_tw.dropna(subset=['Datum'])
+                agg_tables[name] = df_tw.groupby(['Teil','Datum'], as_index=False)['Price_Material_var'].last()
 
     parts: set[str] = set()
     for df in agg_tables.values():
@@ -1083,13 +1165,20 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
         else:
             feat['EoD_Bestand'] = pd.to_numeric(feat['Lagerbestand'], errors='coerce').ffill()
         feat['EoD_Bestand'] = pd.to_numeric(feat['EoD_Bestand'], errors='coerce').fillna(0)
+        # Preis (TeileWert) asof-Join
+        if 'TeileWert' in data:
+            tw = data['TeileWert'][['Datum','Price_Material_var']].copy()
+            if not tw.empty:
+                tw = tw.dropna(subset=['Datum']).sort_values('Datum')
+                feat = pd.merge_asof(feat.sort_values('Datum'), tw, on='Datum', direction='backward')
+
         # SiBe Verlauf (asof)
         if 'SiBeVerlauf' in data:
             sibe = data['SiBeVerlauf'][['Datum','Im Sytem hinterlgeter SiBe','Alter_SiBe']].copy()
             sibe['Datum'] = pd.to_datetime(sibe['Datum'], errors='coerce').dt.floor('D'); sibe = sibe.dropna(subset=['Datum']).sort_values('Datum')
             merged = pd.merge_asof(feat.sort_values('Datum'), sibe, on='Datum', direction='backward')
             merged['Im Sytem hinterlgeter SiBe'] = pd.to_numeric(merged['Im Sytem hinterlgeter SiBe'], errors='coerce').fillna(0)
-            # Backfill vor erstem Änderungsdatum mit Alter_SiBe (falls vorhanden)
+            # Backfill vor erstem Ã„nderungsdatum mit Alter_SiBe (falls vorhanden)
             try:
                 first_change = sibe['Datum'].min()
                 alter_val = pd.to_numeric(
@@ -1144,7 +1233,7 @@ def run_pipeline_selective(
         df_feat = _compute_selected_features(df, features_to_build)
         df_lab = _compute_selected_labels(df_feat, labels_to_build)
         # final selection: locked + selected
-        locked = ['Teil', 'Datum', 'F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe', 'EoD_Bestand_noSiBe']
+        locked = ['Teil', 'Datum', 'F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe', 'EoD_Bestand_noSiBe', 'WBZ_Days']
         final_cols = [c for c in locked + features_to_build + labels_to_build if c in df_lab.columns]
         out_full = df_lab[final_cols].copy()
         # split into historical and dispo period per part
@@ -1211,3 +1300,4 @@ if __name__ == '__main__':
     parser.add_argument('--output', default='Features', help='Output directory for feature folders')
     args = parser.parse_args()
     run_pipeline(args.input, args.output)
+

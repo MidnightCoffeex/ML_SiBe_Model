@@ -48,7 +48,7 @@ Diese Dokumentation beschreibt Ziel, Datenbasis, Pipeline (Feature Engineering),
 - Immer enthalten (nicht abwählbar): `F_NiU_EoD_Bestand`, `F_NiU_Hinterlegter SiBe`, `EoD_Bestand_noSiBe`.
 - Nachfrage: `DemandMean_*`, `DemandMax_*` inkl. Varianten `log1p`, `z_`, `robz`.
 - Flags & Stammdaten: `Flag_StockOut`, `WBZ_Days`.
-- Labels: `L_NiU_WBZ_BlockMinAbs` (Diagnose), `LABLE_HalfYear_Target` (Training).
+- Labels: `L_NiU_WBZ_BlockMinAbs` (Diagnose), `L_HalfYear_Target` (Training).
 - Lag‑Features (neu):
   - Punkt‑Lags: `Lag_EoD_Bestand_noSiBe_{7Tage,28Tage,wbzTage,2xwbzTage}` = Wert genau vor X Tagen.
   - Mittel‑Lags: `Lag_EoD_Bestand_noSiBe_mean_{...}` = rückblickendes Fenster (ohne heutigen Tag).
@@ -68,7 +68,7 @@ Diese Dokumentation beschreibt Ziel, Datenbasis, Pipeline (Feature Engineering),
 ## 4. Training
 
 - Modelle: `gb` (sklearn Gradient Boosting), optional `xgb` (XGBoost), `lgbm` (LightGBM).
-- Ziel: `LABLE_HalfYear_Target` (halbjährlich konstante Empfehlung, abgeleitet aus `L_NiU_WBZ_BlockMinAbs`).
+- Ziel: `L_HalfYear_Target` (halbjährlich konstante Empfehlung, abgeleitet aus `L_NiU_WBZ_BlockMinAbs`).
 - Gewichte: Schemata `none|blockmin|flag` plus Faktor (z. B. 5.0) per Prompt.
 - Splits: Zeitreihen‑konform, optional CV‑Splits.
 - Fortschritt: Optionaler Progress‑Balken parallel für `gb` via `--progress` oder Prompt.

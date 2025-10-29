@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate ALL parts with the ALL/gb model using LABLE_HalfYear_Target.
+"""Evaluate ALL parts with the ALL/gb model using L_HalfYear_Target.
 Outputs to New_Test_Plots/ALL/gb/<model-id>/<part>/
 
 Usage:
@@ -23,7 +23,7 @@ def main() -> None:
     model_path = f'AGENTS_MAKE_ML/Modelle/ALL/gb/{args.model_id}/model.joblib'
     plots_root = Path('New_Test_Plots') / 'ALL' / 'gb' / args.model_id
     raw_dir = 'AGENTS_MAKE_ML/Rohdaten'
-    targets = ['LABLE_HalfYear_Target']
+    targets = ['L_HalfYear_Target']
 
     for part in parts:
         features_path = features_root / part / 'features.parquet'

@@ -14,7 +14,14 @@ from sklearn.model_selection import TimeSeriesSplit
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src import train_model
+import sys
 
+# Ensure UTF-8 output for proper Umlaut rendering
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
 
 def main() -> None:
     import argparse
@@ -29,7 +36,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--targets",
-        default="LABLE_HalfYear_Target",
+        default="L_HalfYear_Target",
         help="Comma separated target column names",
     )
     parser.add_argument("--n_estimators", type=int)
@@ -40,7 +47,7 @@ def main() -> None:
     parser.add_argument("--ts_scope", help="Timeseries scope: global|local")
     parser.add_argument("--weight_scheme", help="Weighting: none|blockmin|flag")
     parser.add_argument("--weight_factor", type=float, help="Weight factor for selected scheme")
-    parser.add_argument("--feature-list", help="Path to selected_features.json")
+    # removed: feature-list JSON; selection happens in feature build step
     parser.add_argument("--progress", action="store_true", help="Show live training progress")
     args = parser.parse_args()
 
@@ -79,7 +86,7 @@ def main() -> None:
     try:
         current_targets = args.targets if isinstance(args.targets, str) else ""
     except AttributeError:
-        current_targets = "LABLE_HalfYear_Target"
+        current_targets = "L_HalfYear_Target"
     entry = input(f"Target-Label(s) [{current_targets}]: ")
     if entry.strip():
         args.targets = entry.strip()
@@ -128,23 +135,7 @@ def main() -> None:
         part_name = args.part
 
     target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
-    # Load selected features list if provided or present in root
     selected_features = None
-    sel_path = None
-    if args.feature_list:
-        sel_path = Path(args.feature_list)
-    else:
-        cand = Path(args.data) / 'selected_features.json'
-        if cand.exists():
-            sel_path = cand
-    if sel_path and sel_path.exists():
-        try:
-            import json
-            data = json.loads(sel_path.read_text(encoding='utf-8'))
-            selected_features = [str(x) for x in data.get('selected', [])]
-            print(f"Feature-Liste geladen: {sel_path} (n={len(selected_features)})")
-        except Exception as exc:
-            print(f"Warnung: Konnte Feature-Liste nicht laden: {exc}")
     # Datumsbasierte Splits an Tagesgrenzen: wir fÃ¼hren TimeSeriesSplit Ã¼ber die eindeutigen Tage aus
     # und mappen anschlieÃŸend zurÃ¼ck auf Zeilenindizes des gefilterten DataFrames.
     def compute_date_based_split_indices(df_full: pd.DataFrame, targets: list[str], n_splits: int = 5):
@@ -248,6 +239,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 

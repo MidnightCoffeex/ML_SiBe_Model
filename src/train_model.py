@@ -21,7 +21,7 @@ import os
 
 
 def _compute_block_min_abs_label(df: pd.DataFrame, horizon_floor_days: int = 14) -> pd.Series:
-    """Compute LABLE_WBZ_BlockMinAbs on-the-fly:
+    """Compute L_WBZ_BlockMinAbs on-the-fly:
     For each date, horizon H = max(WBZ_Days, horizon_floor_days),
     label = max(0, -min(EoD_Bestand_noSiBe) over [t, t+H)).
     """
@@ -44,7 +44,7 @@ def _compute_block_min_abs_label(df: pd.DataFrame, horizon_floor_days: int = 14)
         y = vals[mask]
         mmin = float(np.nanmin(y)) if y.size else 0.0
         out[i] = max(0.0, -mmin)
-    return pd.Series(out, index=df.index, name='LABLE_WBZ_BlockMinAbs')
+    return pd.Series(out, index=df.index, name='L_WBZ_BlockMinAbs')
 
 
 def _compute_halfyear_label_from_block(df: pd.DataFrame, block_col: str = 'L_NiU_WBZ_BlockMinAbs') -> pd.Series:
@@ -77,7 +77,7 @@ def _compute_halfyear_label_from_block(df: pd.DataFrame, block_col: str = 'L_NiU
         i = j + 1
     result = pd.Series(out, index=sdf['index'])
     result = result.reindex(df.index).fillna(method='ffill').fillna(method='bfill')
-    result.name = 'LABLE_HalfYear_Target'
+    result.name = 'L_HalfYear_Target'
     return result
 
 def load_features(path: str) -> pd.DataFrame:
@@ -100,20 +100,19 @@ def prepare_data(df: pd.DataFrame, targets: list[str], *, selected_features: lis
     in any target removed. Excludes non-feature columns such as nF_* and
     legacy display columns from X."""
     # ensure HalfYear label exists if requested; compute from block-min-abs
-    if 'LABLE_HalfYear_Target' in targets and 'LABLE_HalfYear_Target' not in df.columns:
+    # Compute HalfYear label on demand (supports new name)
+    if 'L_HalfYear_Target' in targets and 'L_HalfYear_Target' not in df.columns:
         df = df.copy()
         # prefer using precomputed hidden block label; else compute
         block_col = 'L_NiU_WBZ_BlockMinAbs'
         if block_col not in df.columns:
             # try legacy names for compatibility
-            if 'LABLE_WBZ_BlockMinAbs' in df.columns:
-                block_col = 'LABLE_WBZ_BlockMinAbs'
-            elif '_LABLE_WBZ_BlockMinAbs' in df.columns:
-                block_col = '_LABLE_WBZ_BlockMinAbs'
+            if 'L_WBZ_BlockMinAbs' in df.columns:
+                block_col = 'L_WBZ_BlockMinAbs'
             else:
-                df['LABLE_WBZ_BlockMinAbs'] = _compute_block_min_abs_label(df)
-                block_col = 'LABLE_WBZ_BlockMinAbs'
-        df['LABLE_HalfYear_Target'] = _compute_halfyear_label_from_block(df, block_col)
+                df['L_WBZ_BlockMinAbs'] = _compute_block_min_abs_label(df)
+                block_col = 'L_WBZ_BlockMinAbs'
+        df['L_HalfYear_Target'] = _compute_halfyear_label_from_block(df, block_col)
     missing = [t for t in targets if t not in df.columns]
     if missing:
         raise ValueError(f"Target column(s) {missing} not found in dataset")
@@ -519,7 +518,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--targets",
-        default="LABLE_HalfYear_Target",
+        default="L_HalfYear_Target",
         help="Comma separated target column names",
     )
     parser.add_argument("--n_estimators", type=int, default=100)

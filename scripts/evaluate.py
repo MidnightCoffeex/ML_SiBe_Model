@@ -5,6 +5,15 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src import evaluate_model
+from src import train_model
+import sys
+
+# Ensure UTF-8 output for proper Umlaut rendering
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
 
 
 def main() -> None:
@@ -18,11 +27,10 @@ def main() -> None:
     parser.add_argument("--raw", help="Directory with raw CSV files")
     parser.add_argument(
         "--targets",
-        default="LABLE_HalfYear_Target",
-        help="Comma separated target column names",
+        default="",
+        help="Comma separated target column names (leave empty to auto-detect)",
     )
     parser.add_argument("--plots", help="Directory to store evaluation results")
-    parser.add_argument("--feature-list", help="Path to selected_features.json")
     args = parser.parse_args()
 
     if not args.features:
@@ -37,21 +45,10 @@ def main() -> None:
     try:
         current_targets = args.targets if isinstance(args.targets, str) else ""
     except AttributeError:
-        current_targets = "LABLE_HalfYear_Target"
-    entry = input(f"Target-Label(s) [{current_targets}]: ")
+        current_targets = ""
+    entry = input(f"Target-Label(s) [auto]: ")
     if entry.strip():
         args.targets = entry.strip()
-    # Load optional feature list once for reuse
-    selected_features = None
-    sel_path = Path(args.feature_list) if getattr(args, 'feature_list', None) else (Path(args.features) / 'selected_features.json')
-    if sel_path and sel_path.exists():
-        try:
-            import json
-            data = json.loads(sel_path.read_text(encoding='utf-8'))
-            selected_features = [str(x) for x in data.get('selected', [])]
-            print(f"Feature-Liste geladen: {sel_path} (n={len(selected_features)})")
-        except Exception as exc:
-            print(f"Warnung: Konnte Feature-Liste nicht laden: {exc}")
 
     eval_part = args.part
     if args.part.upper() == "ALL":
@@ -85,7 +82,7 @@ def main() -> None:
                 features_path = Path(args.features) / p / 'features.parquet'
                 plot_dir = base_plot_dir / p
                 plot_dir.mkdir(parents=True, exist_ok=True)
-                evaluate_model.run_evaluation(str(features_path), str(model_path), target_list, str(plot_dir), args.raw, model_type=args.model_type, selected_features=selected_features)
+                evaluate_model.run_evaluation(str(features_path), str(model_path), target_list, str(plot_dir), args.raw, model_type=args.model_type, selected_features=None)
             return
 
     features_path = Path(args.features) / eval_part / 'features.parquet'
@@ -94,10 +91,25 @@ def main() -> None:
         args.plots = input("Ordner fÃ¼r Ergebnisse [plots]: ") or "plots"
     plot_dir = Path(args.plots) / args.part / args.model_type / args.model_id
 
-    target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
-    evaluate_model.run_evaluation(str(features_path), str(model_path), target_list, str(plot_dir), args.raw, model_type=args.model_type, selected_features=selected_features)
+    # Auto-detect targets if empty
+    if not args.targets:
+        try:
+            df_cols = train_model.load_features(str(features_path)).columns
+            if 'L_HalfYear_Target' in df_cols:
+                target_list = ['L_HalfYear_Target']
+            elif 'LABLE_HalfYear_Target' in df_cols:
+                target_list = ['LABLE_HalfYear_Target']
+            else:
+                # fallback to block label if present
+                target_list = ['L_WBZ_BlockMinAbs'] if 'L_WBZ_BlockMinAbs' in df_cols or 'L_NiU_WBZ_BlockMinAbs' in df_cols else []
+        except Exception:
+            target_list = []
+    else:
+        target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
+    evaluate_model.run_evaluation(str(features_path), str(model_path), target_list, str(plot_dir), args.raw, model_type=args.model_type, selected_features=None)
 
 
 if __name__ == "__main__":
     main()
+
 

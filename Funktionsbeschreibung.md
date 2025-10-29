@@ -41,7 +41,7 @@ Lag‑Features (neu):
 - „Mittel‑Lag“: z. B. `Lag_EoD_Bestand_noSiBe_mean_28Tage` = Durchschnitt der letzten 28 Tage (ohne heute).
 
 Label (Ziel) für das Training:
-- `LABLE_HalfYear_Target`: Stabile, halbjährliche Empfehlung, abgeleitet aus dem diagnostischen `L_NiU_WBZ_BlockMinAbs`.
+- `L_HalfYear_Target`: Stabile, halbjährliche Empfehlung, abgeleitet aus dem diagnostischen `L_NiU_WBZ_BlockMinAbs`.
 
 Hinweis zu Abhängigkeiten: Wenn eine abgeleitete Kennzahl (z. B. `..._log1p`) gewählt wird, werden dafür nötige Basiswerte intern berechnet – sie erscheinen aber nur in der Ausgabe, wenn sie ebenfalls angehakt wurden.
 

@@ -31,7 +31,7 @@ CSV‑Dateien sind typischerweise semikolon‑getrennt und enthalten Bestands‑
 - Weitere Feature‑Gruppen (Auszug):
   - Nachfrage: `DemandMean_*`, `DemandMax_*` inkl. Varianten `log1p`, `z_`, `robz`
   - Flags: `Flag_StockOut`; WBZ: `WBZ_Days`
-  - Labels: `L_NiU_WBZ_BlockMinAbs` (Diagnose), `LABLE_HalfYear_Target` (Training)
+  - Labels: `L_NiU_WBZ_BlockMinAbs` (Diagnose), `L_HalfYear_Target` (Training)
 - Lag‑Features (neu):
   - Punkt‑Lags: `Lag_EoD_Bestand_noSiBe_{7Tage,28Tage,wbzTage,2xwbzTage}`
   - Mittel‑Lags: `Lag_EoD_Bestand_noSiBe_mean_{7Tage,28Tage,wbzTage,2xwbzTage}`
@@ -109,6 +109,6 @@ python scripts/evaluate.py
 
 - `F_NiU_*`: Anzeige/Hilfsspalten, nicht fürs Training.
 - `L_NiU_*`: Diagnose‑Labels, nicht fürs Training.
-- Trainingsziel: `LABLE_HalfYear_Target` (aus `L_NiU_WBZ_BlockMinAbs`).
+- Trainingsziel: `L_HalfYear_Target` (aus `L_NiU_WBZ_BlockMinAbs`).
 - Train/Eval schließen `F_NiU_`/`L_NiU_`/`nF_` automatisch aus.
 

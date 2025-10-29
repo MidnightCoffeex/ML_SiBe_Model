@@ -8,7 +8,7 @@ Dieser Verlauf fasst die wichtigsten Schritte von der ursprünglichen Pipeline b
 - Skripte: `build_features.py`, `train.py`, `evaluate.py`.
 
 ## 2025‑09‑30
-- Einführung Ziel `LABLE_HalfYear_Target`: halbjährlich konstanter Zielwert aus dem Maximum von `L_NiU_WBZ_BlockMinAbs` pro Halbjahr, leichte Faktoren (WBZ, Aktivität, Volatilität) vorsichtig berücksichtigt.
+- Einführung Ziel `L_HalfYear_Target`: halbjährlich konstanter Zielwert aus dem Maximum von `L_NiU_WBZ_BlockMinAbs` pro Halbjahr, leichte Faktoren (WBZ, Aktivität, Volatilität) vorsichtig berücksichtigt.
 - Anpassungen in `data_pipeline.py`, `train_model.py`, `evaluate_model.py` und Skripten.
 
 ## 2025‑10‑01

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 import tkinter as tk
@@ -12,7 +12,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src import data_pipeline
 
 
-LOCKED_BASE = ['F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe', 'EoD_Bestand_noSiBe']
+LOCKED_BASE = ['F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe', 'EoD_Bestand_noSiBe', 'WBZ_Days']
 
 
 class ScrollableFrame(tk.Frame):
@@ -65,13 +65,13 @@ class App(tk.Tk):
         top = tk.Frame(self)
         top.pack(fill=tk.X, padx=10, pady=10)
 
-        tk.Button(top, text='Rohdaten wählen', command=self.pick_input).pack(side=tk.LEFT)
+        tk.Button(top, text='Rohdaten wÃ¤hlen', command=self.pick_input).pack(side=tk.LEFT)
         self.in_label = tk.Label(top, text='Rohdaten: (leer)', anchor='w')
         self.in_label.pack(side=tk.LEFT, padx=10)
 
         bot = tk.Frame(self)
         bot.pack(fill=tk.X, padx=10)
-        tk.Button(bot, text='Ausgabe wählen', command=self.pick_output).pack(side=tk.LEFT)
+        tk.Button(bot, text='Ausgabe wÃ¤hlen', command=self.pick_output).pack(side=tk.LEFT)
         self.out_label = tk.Label(bot, text='Ausgabe: GPT_Features_Test (Default)', anchor='w')
         self.out_label.pack(side=tk.LEFT, padx=10)
 
@@ -128,13 +128,13 @@ class App(tk.Tk):
         tk.Button(self, text='Build', command=self.run_build).pack(side=tk.BOTTOM, pady=15)
 
     def pick_input(self) -> None:
-        sel = filedialog.askdirectory(title='Rohdaten-Ordner wählen')
+        sel = filedialog.askdirectory(title='Rohdaten-Ordner wÃ¤hlen')
         if sel:
             self.input_dir = Path(sel)
             self.in_label.config(text=f'Rohdaten: {self.input_dir}')
 
     def pick_output(self) -> None:
-        sel = filedialog.askdirectory(title='Ausgabe-Ordner wählen')
+        sel = filedialog.askdirectory(title='Ausgabe-Ordner wÃ¤hlen')
         if sel:
             self.output_dir = Path(sel)
             self.out_label.config(text=f'Ausgabe: {self.output_dir}')
@@ -147,6 +147,19 @@ class App(tk.Tk):
         labels = [k for k, v in self.label_vars.items() if v.get()]
         try:
             data_pipeline.run_pipeline_selective(inp, out, features, labels)
+            # Auswahl der Haken dokumentieren
+            try:
+                sel = {
+                    'input_dir': inp,
+                    'output_dir': out,
+                    'selected_features': features,
+                    'selected_labels': labels,
+                }
+                out_root = Path(out)
+                out_root.mkdir(parents=True, exist_ok=True)
+                (out_root / 'build_selection.json').write_text(__import__('json').dumps(sel, ensure_ascii=False, indent=2), encoding='utf-8')
+            except Exception:
+                pass
             messagebox.showinfo('Fertig', f'Features geschrieben nach {out}')
         except Exception as exc:
             messagebox.showerror('Fehler', str(exc))
@@ -159,3 +172,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+

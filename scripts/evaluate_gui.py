@@ -28,7 +28,7 @@ class App(tk.Tk):
         self.v_model_type = tk.StringVar(value="gb")
         self.v_model_id = tk.StringVar(value="1")
         self.v_raw = tk.StringVar(value=str(ROOT / "Rohdaten"))
-        self.v_targets = tk.StringVar(value="LABLE_HalfYear_Target")
+        self.v_targets = tk.StringVar(value="L_HalfYear_Target")
         self.v_plots = tk.StringVar(value=str(ROOT / "New_Test_Plots"))
 
         frm = tk.Frame(self)
