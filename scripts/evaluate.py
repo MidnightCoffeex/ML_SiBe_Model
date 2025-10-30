@@ -52,20 +52,20 @@ def main() -> None:
 
     eval_part = args.part
     if args.part.upper() == "ALL":
-        eval_part = input("Teilnummer fÃ¼r Auswertung: ")
+        eval_part = input("Teilnummer für Auswertung: ")
 
     if not args.model_type:
         mdir = Path(args.model_dir) / args.part
         types = [p.name for p in mdir.glob('*') if p.is_dir()]
         if types:
-            print("VerfÃ¼gbare Modelltypen:", ", ".join(sorted(types)))
+            print("Verfügbare Modelltypen:", ", ".join(sorted(types)))
         args.model_type = input("Modelltyp: ")
 
     if not args.model_id:
         mdir = Path(args.model_dir) / args.part / args.model_type
         existing = [p.name for p in mdir.glob('*') if p.is_dir() and p.name.isdigit()]
         if existing:
-            print("VerfÃ¼gbare Modelle:", ", ".join(sorted(existing)))
+            print("Verfügbare Modelle:", ", ".join(sorted(existing)))
         args.model_id = input("Modellnummer: ")
 
     # Optional: evaluate ALL parts when using an ALL model
@@ -75,7 +75,7 @@ def main() -> None:
             parts = sorted(p.parent.name for p in Path(args.features).glob('*/features.parquet'))
             model_path = Path(args.model_dir) / args.part / args.model_type / args.model_id / 'model.joblib'
             if not args.plots:
-                args.plots = input("Ordner fÇ¬r Ergebnisse [plots]: ") or "plots"
+                args.plots = input("Ordner für Ergebnisse [plots]: ") or "plots"
             base_plot_dir = Path(args.plots) / args.part / args.model_type / args.model_id
             target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
             for p in parts:
@@ -88,7 +88,7 @@ def main() -> None:
     features_path = Path(args.features) / eval_part / 'features.parquet'
     model_path = Path(args.model_dir) / args.part / args.model_type / args.model_id / 'model.joblib'
     if not args.plots:
-        args.plots = input("Ordner fÃ¼r Ergebnisse [plots]: ") or "plots"
+        args.plots = input("Ordner für Ergebnisse [plots]: ") or "plots"
     plot_dir = Path(args.plots) / args.part / args.model_type / args.model_id
 
     # Auto-detect targets if empty
@@ -111,5 +111,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 

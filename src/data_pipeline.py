@@ -82,12 +82,19 @@ def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[st
         else:
             dataset = rest
         dataset = dataset.split('.csv')[0]
-        if dataset.startswith('Teile'):
+        # Normalize dataset names; preserve TeileWert explicitly for price ingestion
+        # Handle common variants like 'M100_TeileWert', 'TeileWert', etc.
+        if 'TeileWert' in dataset:
+            dataset = 'TeileWert'
+        elif dataset.startswith('Teile'):
+            _orig = dataset
             cleaned = dataset.replace('Teile', '')
             if cleaned in column_map:
                 dataset = cleaned
-        if dataset not in column_map:
-            continue  # ignore unrelated exports
+            elif 'Wert' in _orig:
+                dataset = 'TeileWert'
+        if dataset not in column_map and dataset != 'TeileWert':
+            continue  # ignore unrelated exports (allow TeileWert)
         df = load_csv_file(csv, part)
         # For SiBeVerlauf we now allow new unified export schema
         if dataset == 'SiBeVerlauf':
@@ -115,6 +122,8 @@ def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[st
                     keep_cols.append(c)
             if 'Teil' not in keep_cols and 'Teil' in df.columns:
                 keep_cols.append('Teil')
+        elif dataset == 'TeileWert':
+            keep_cols = list(df.columns)
         else:
             keep_cols = [c for c in column_map[dataset] if c in df.columns]
         if 'Teil' in df.columns and 'Teil' not in keep_cols:
@@ -208,6 +217,31 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
     """
     column_map = _load_column_map(xlsx_path)
     tables = load_all_tables(raw_dir, column_map)
+    # Build a per-Teil price map from TeileWert (last known price across exports)
+    price_map: dict[str, float] = {}
+    try:
+        if 'TeileWert' in tables:
+            tw_all = tables['TeileWert'].copy()
+            # Detect the price column robustly
+            price_col = None
+            for c in tw_all.columns:
+                lc = str(c).lower()
+                if 'material' in lc and ('dpr' in lc or 'preis' in lc or 'wert' in lc):
+                    price_col = c
+                    break
+            if price_col is not None:
+                tw_all = tw_all[['Teil', 'ExportDatum', price_col]].copy()
+                tw_all.rename(columns={price_col: 'Price_Material_var'}, inplace=True)
+                tw_all['ExportDatum'] = pd.to_datetime(tw_all['ExportDatum'], errors='coerce')
+                tw_all = tw_all.dropna(subset=['ExportDatum'])
+                tw_all['Price_Material_var'] = pd.to_numeric(tw_all['Price_Material_var'], errors='coerce')
+                # take last by ExportDatum per Teil
+                tw_all = tw_all.sort_values(['Teil', 'ExportDatum']).groupby('Teil', as_index=False).last()
+                for _, r in tw_all.iterrows():
+                    if pd.notna(r['Price_Material_var']):
+                        price_map[str(r['Teil'])] = float(r['Price_Material_var'])
+    except Exception:
+        price_map = {}
 
     processed: Dict[str, pd.DataFrame] = {}
     # Aggregate relevant datasets
@@ -327,6 +361,12 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             continue
 
         # Build a continuous daily timeline between earliest and latest relevant dates
+        if 'export_cut_date' in locals() and export_cut_date is not None:
+            try:
+                date_set.add(pd.to_datetime(export_cut_date))
+                date_set.add(pd.to_datetime(export_cut_date) + pd.Timedelta(days=1))
+            except Exception:
+                pass
         # This ensures eventless days are represented for robust rolling windows and lags
         min_date = pd.to_datetime(min(date_set))
         max_date = pd.to_datetime(max(date_set))
@@ -419,6 +459,20 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             if not tw.empty:
                 tw = tw.dropna(subset=['Datum']).sort_values('Datum')
                 feat = pd.merge_asof(feat.sort_values('Datum'), tw, on='Datum', direction='backward')
+                # Konstante Füllung: letzter bekannter Preis pro Teil in alle Zeilen
+                try:
+                    _pv = pd.to_numeric(tw['Price_Material_var'], errors='coerce').dropna()
+                    if not _pv.empty:
+                        feat['Price_Material_var'] = float(_pv.iloc[-1])
+                except Exception:
+                    pass
+        # Stelle sicher, dass die Spalte immer existiert (auch ohne TeileWert)
+        if 'Price_Material_var' not in feat.columns:
+            feat['Price_Material_var'] = np.nan
+        # Fülle konstanten Preis aus globaler Map (falls verfügbar)
+        _pconst = price_map.get(str(part))
+        if _pconst is not None:
+            feat['Price_Material_var'] = float(_pconst)
 
         # rename display-only (no-feature) columns and compute training series
         feat.rename(columns={'EoD_Bestand': 'F_NiU_EoD_Bestand'}, inplace=True)
@@ -689,134 +743,6 @@ def save_feature_folders_split(
     for part, bundle in features.items():
         df = bundle['df']  # type: ignore[assignment]
         first_dispo_date = bundle.get('first_dispo_date')  # type: ignore[assignment]
-        if isinstance(first_dispo_date, pd.Timestamp):
-            hist_df = df[df['Datum'] < first_dispo_date].copy()
-            dispo_df = df[df['Datum'] >= first_dispo_date].copy()
-        else:
-            hist_df = df.copy()
-            dispo_df = df.iloc[0:0].copy()
-
-        # Recompute forward-looking labels inside historical subset only,
-        # so that no Test_Set future bleeds into training labels.
-        if not hist_df.empty:
-            hist_df = hist_df.sort_values('Datum').reset_index(drop=True)
-            date_list = pd.to_datetime(hist_df['Datum']).tolist()
-            vals = pd.to_numeric(hist_df['EoD_Bestand_noSiBe'], errors='coerce').fillna(0).to_numpy()
-            # BlockMinAbs per row (WBZ-days window; restrict to hist end)
-            lbl_block = np.zeros(len(hist_df), dtype=float)
-            for ii in range(len(hist_df)):
-                start = date_list[ii]
-                # WBZ pro Zeile (fallback 14â†’1 Tag fÃ¼r BlockMinAbs wie zuvor minimal 1)
-                wbz_row = pd.to_numeric(hist_df.loc[ii, 'WBZ_Days'], errors='coerce') if 'WBZ_Days' in hist_df.columns else np.nan
-                lead_days = int(wbz_row) if pd.notna(wbz_row) and wbz_row > 0 else 1
-                end = start + pd.Timedelta(days=lead_days)
-                # Collect values until end (or hist end)
-                y_vals = []
-                for kk in range(ii, len(hist_df)):
-                    if date_list[kk] < end:
-                        y_vals.append(vals[kk])
-                    else:
-                        break
-                y = np.array(y_vals, dtype=float)
-                mmin = float(np.nanmin(y)) if y.size else 0.0
-                lbl_block[ii] = max(0.0, -mmin)
-            block_base = lbl_block.copy()
-
-            # Half-year window with factors (within hist only)
-            lbl_halfyear_base = np.zeros(len(hist_df), dtype=float)
-            lbl_halfyear = np.zeros(len(hist_df), dtype=float)
-            f_wbz_arr = np.zeros(len(hist_df), dtype=float)
-            f_freq_arr = np.zeros(len(hist_df), dtype=float)
-            f_vol_arr = np.zeros(len(hist_df), dtype=float)
-            demand_series = (
-                hist_df['EoD_Bestand_noSiBe'].shift(1) - hist_df['EoD_Bestand_noSiBe']
-            )
-            demand_series = pd.to_numeric(demand_series, errors='coerce').clip(lower=0).fillna(0).to_numpy()
-            ii = 0
-            while ii < len(hist_df):
-                start = date_list[ii]
-                target = start + pd.DateOffset(months=6)
-                jj = ii
-                while jj + 1 < len(hist_df) and date_list[jj + 1] < target:
-                    jj += 1
-                if jj + 1 < len(hist_df) and date_list[jj] < target <= date_list[jj + 1]:
-                    jj = jj + 1
-                window_max = float(np.nanmax(lbl_block[ii:jj + 1])) if jj >= ii else float(lbl_block[ii])
-                wbz_eff = float(pd.to_numeric(hist_df.loc[ii, 'WBZ_Days'], errors='coerce')) if 'WBZ_Days' in hist_df.columns else 0.0
-                if not np.isfinite(wbz_eff) or wbz_eff <= 0:
-                    wbz_eff = 14.0
-                wbz_eff = max(14.0, wbz_eff)
-                # f_wbz
-                if wbz_eff <= 28:
-                    f_wbz = 0.0
-                elif wbz_eff <= 84:
-                    f_wbz = 0.10 * (wbz_eff - 28.0) / (84.0 - 28.0)
-                else:
-                    f_wbz = 0.20
-                # f_freq (events per window scaled by WBZ)
-                window_days = max(1, int((date_list[jj] - date_list[ii]).days) + 1)
-                events_window = int(np.sum(demand_series[ii:jj + 1] > 0))
-                est_events_wbz = events_window * (wbz_eff / window_days)
-                f_freq = 0.20 * (np.log1p(est_events_wbz) / np.log1p(8.0))
-                f_freq = float(min(0.20, max(0.0, f_freq)))
-                # f_vol (CV in window)
-                dwin = demand_series[ii:jj + 1]
-                mu = float(np.nanmean(dwin)) if dwin.size else 0.0
-                sigma = float(np.nanstd(dwin)) if dwin.size else 0.0
-                cv = (sigma / mu) if mu > 1e-12 else 0.0
-                if cv <= 0.3:
-                    f_vol = 0.0
-                elif cv >= 0.8:
-                    f_vol = 0.20
-                else:
-                    f_vol = 0.20 * (cv - 0.3) / (0.8 - 0.3)
-                # Preisfaktor (logarithmisch, reduzierend, Cap 0.10)
-                if 'Price_Material_var' in hist_df.columns:
-                    p = pd.to_numeric(hist_df['Price_Material_var'], errors='coerce').fillna(0).astype(float).to_numpy()
-                    p_log = np.log1p(np.maximum(0.0, p))
-                    scale = np.nanpercentile(p_log[p_log > 0], 95) if np.any(p_log > 0) else 1.0
-                    f_price = -0.10 * (p_log / scale) if scale > 0 else np.zeros_like(p_log)
-                    f_price = float(np.clip(f_price[ii], -0.10, 0.0)) if ii < len(f_price) else 0.0
-                else:
-                    f_price = 0.0
-                total_factor = min(0.40, max(0.0, f_wbz + f_freq + f_vol + f_price))
-                base_val = window_max
-                final_val = base_val * (1.0 + total_factor)
-                lbl_halfyear_base[ii:jj + 1] = base_val
-                lbl_halfyear[ii:jj + 1] = final_val
-                f_wbz_arr[ii:jj + 1] = f_wbz
-                f_freq_arr[ii:jj + 1] = f_freq
-                f_vol_arr[ii:jj + 1] = f_vol
-                # Preisfaktor im Fenster als konstanten Wert Ã¼bernehmen
-                if 'Price_Material_var' in hist_df.columns:
-                    f_price_win = np.full(jj - ii + 1, f_price, dtype=float)
-                else:
-                    f_price_win = np.zeros(jj - ii + 1, dtype=float)
-                # HÃ¤nge als temporÃ¤re Liste an; final wird volle LÃ¤nge vergeben
-                ii = jj + 1
-            hist_df['L_NiU_HalfYear_Base'] = lbl_halfyear_base
-            hist_df['F_NiU_Factor_WBZ'] = f_wbz_arr
-            hist_df['F_NiU_Factor_Freq'] = f_freq_arr
-            hist_df['F_NiU_Factor_Vol'] = f_vol_arr
-            # FÃ¼r Konsistenz: Preisfaktor pro Zeile berechnen (erneut, robust gegen Fenstergrenzen)
-            if 'Price_Material_var' in hist_df.columns:
-                p = pd.to_numeric(hist_df['Price_Material_var'], errors='coerce').fillna(0).astype(float).to_numpy()
-                p_log = np.log1p(np.maximum(0.0, p))
-                scale = np.nanpercentile(p_log[p_log > 0], 95) if np.any(p_log > 0) else 1.0
-                f_price_arr = -0.10 * (p_log / scale) if scale > 0 else np.zeros_like(p_log)
-                f_price_arr = np.clip(f_price_arr, -0.10, 0.0)
-            else:
-                f_price_arr = np.zeros(len(hist_df), dtype=float)
-            hist_df['F_NiU_Factor_Price'] = f_price_arr
-            # Finales Target mit Gesamtfaktor (Clip 0..0.40)
-            total_arr = np.clip(f_wbz_arr + f_freq_arr + f_vol_arr + f_price_arr, 0.0, 0.40)
-            hist_df['L_HalfYear_Target'] = lbl_halfyear_base * (1.0 + total_arr)
-        # Ensure identical column structure between hist_df and dispo_df
-        all_cols = list(hist_df.columns)
-        for c in all_cols:
-            if c not in dispo_df.columns:
-                dispo_df[c] = np.nan
-        dispo_df = dispo_df[all_cols]
 
         # write historical subset
         part_dir = out_feat / str(part)
@@ -851,8 +777,6 @@ def save_feature_folders_split(
 def _list_registry_features() -> list[str]:
     """Names of selectable features exposed to the GUI."""
     return [
-        # Materialpreis (direkt aus TeileWert)
-        'Price_Material_var',
         # Transforms on EoD_noSiBe
         'EoD_Bestand_noSiBe_log1p',
         'EoD_Bestand_noSiBe_z_Teil',
@@ -1052,7 +976,17 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
     """
     column_map = _load_column_map(xlsx_path)
     tables = load_all_tables(raw_dir, column_map)
-    # aggregate
+    # Determine latest export date across loaded tables (cut for train/test split)
+    export_dates: list[pd.Timestamp] = []
+    for _df in tables.values():
+        if 'ExportDatum' in _df.columns:
+            try:
+                _ed = pd.to_datetime(_df['ExportDatum'], errors='coerce')
+                if not _ed.dropna().empty:
+                    export_dates.append(_ed.max())
+            except Exception:
+                pass
+    export_cut_date: pd.Timestamp | None = max(export_dates) if export_dates else None    # aggregate
     agg_tables: Dict[str, pd.DataFrame] = {}
     for name, df in tables.items():
         if name == 'Lagerbew':
@@ -1165,12 +1099,10 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
         else:
             feat['EoD_Bestand'] = pd.to_numeric(feat['Lagerbestand'], errors='coerce').ffill()
         feat['EoD_Bestand'] = pd.to_numeric(feat['EoD_Bestand'], errors='coerce').fillna(0)
-        # Preis (TeileWert) asof-Join
-        if 'TeileWert' in data:
-            tw = data['TeileWert'][['Datum','Price_Material_var']].copy()
-            if not tw.empty:
-                tw = tw.dropna(subset=['Datum']).sort_values('Datum')
-                feat = pd.merge_asof(feat.sort_values('Datum'), tw, on='Datum', direction='backward')
+        # Preis (TeileWert) asof-Join\n        if 'TeileWert' in data:\n            tw = data['TeileWert'][['Datum','Price_Material_var']].copy()\n            if not tw.empty:\n                tw = tw.dropna(subset=['Datum']).sort_values('Datum')\n                feat = pd.merge_asof(feat.sort_values('Datum'), tw, on='Datum', direction='backward')\n                # Konstante Füllung pro Teil: nimm letzten bekannten Preiswert\n                try:\n                    _p = pd.to_numeric(tw['Price_Material_var'], errors='coerce').dropna()\n                    if not _p.empty:\n                        feat['Price_Material_var'] = float(_p.iloc[-1])\n                except Exception:\n                    pass\n
+        # Stelle sicher, dass die Spalte immer existiert (auch ohne TeileWert)
+        if 'Price_Material_var' not in feat.columns:
+            feat['Price_Material_var'] = np.nan
 
         # SiBe Verlauf (asof)
         if 'SiBeVerlauf' in data:
@@ -1204,7 +1136,7 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
             if not w.empty:
                 wbz = float(pd.to_numeric(w.iloc[0], errors='coerce'))
         feat['WBZ_Days'] = wbz
-        processed[part] = {"df": feat, "first_dispo_date": first_dispo_date}
+        processed[part] = {"df": feat, "first_dispo_date": first_dispo_date, "export_cut_date": export_cut_date}
     return processed
 
 
@@ -1223,28 +1155,35 @@ def run_pipeline_selective(
     out_root.mkdir(parents=True, exist_ok=True)
     test_root = out_root.parent / f"{out_root.name}_Test"
     test_root.mkdir(parents=True, exist_ok=True)
+
     for part, bundle in core.items():
         df = bundle["df"]
-        first_dispo_date = bundle.get("first_dispo_date")
         if df.empty:
             continue
         df = df.sort_values('Datum').reset_index(drop=True)
-        # compute selected features/labels
+
+        # Compute selected features/labels
         df_feat = _compute_selected_features(df, features_to_build)
         df_lab = _compute_selected_labels(df_feat, labels_to_build)
-        # final selection: locked + selected
-        locked = ['Teil', 'Datum', 'F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe', 'EoD_Bestand_noSiBe', 'WBZ_Days']
+
+        # Final selection: locked + selected
+        locked = [
+            'Teil', 'Datum', 'F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe',
+            'EoD_Bestand_noSiBe', 'WBZ_Days', 'Price_Material_var'
+        ]
         final_cols = [c for c in locked + features_to_build + labels_to_build if c in df_lab.columns]
         out_full = df_lab[final_cols].copy()
-        # split into historical and dispo period per part
-        if isinstance(first_dispo_date, pd.Timestamp):
-            hist_df = out_full[out_full['Datum'] < first_dispo_date].copy()
-            dispo_df = out_full[out_full['Datum'] >= first_dispo_date].copy()
+
+        # Split by export cut date: train <= cut_date, test > cut_date
+        cut_date = bundle.get('export_cut_date')
+        if isinstance(cut_date, pd.Timestamp):
+            hist_df = out_full[out_full['Datum'] <= cut_date].copy()
+            dispo_df = out_full[out_full['Datum'] > cut_date].copy()
         else:
             hist_df = out_full.copy()
             dispo_df = out_full.iloc[0:0].copy()
 
-        # write hist (features)
+        # Write historical subset (Features)
         part_dir = out_root / str(part)
         part_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -1256,14 +1195,13 @@ def run_pipeline_selective(
         except Exception:
             pass
 
-        # write dispo (test set) with identical schema
-        # ensure identical columns
-        for c in final_cols:
-            if c not in dispo_df.columns:
-                dispo_df[c] = np.nan
-        dispo_df = dispo_df[final_cols]
+        # Ensure identical columns and write test subset
         part_dir_t = test_root / str(part)
         part_dir_t.mkdir(parents=True, exist_ok=True)
+        for c in out_full.columns:
+            if c not in dispo_df.columns:
+                dispo_df[c] = np.nan
+        dispo_df = dispo_df[out_full.columns]
         try:
             dispo_df.to_parquet(part_dir_t / 'features.parquet', index=False)
         except Exception:
@@ -1273,31 +1211,4 @@ def run_pipeline_selective(
         except Exception:
             pass
 
-
-def run_pipeline(raw_dir: str, output_dir: str = 'Features') -> None:
-    """Complete preprocessing pipeline producing split outputs per part.
-
-    - ``output_dir`` contains historical (pre-Dispo) subsets per part.
-    - ``Test_Set`` sibling folder contains Dispo-period subsets per part.
-    """
-    # Resolve column spec sheet next to the AGENTS_MAKE_ML package
-    try:
-        default_xlsx = Path(__file__).resolve().parents[1] / 'Spaltenbedeutung.xlsx'
-    except Exception:
-        default_xlsx = Path('Spaltenbedeutung.xlsx')
-    features = build_features_by_part(raw_dir, xlsx_path=str(default_xlsx))
-    # Write historical into output_dir and Dispo-period into a sibling folder at the same level
-    out_base = Path(output_dir)
-    test_subdir = str(out_base.parent / 'Test_Set')
-    save_feature_folders_split(features, output_dir, test_subdir)
-
-
-if __name__ == '__main__':
-    import argparse
-
-    parser = argparse.ArgumentParser(description='Process raw CSV data')
-    parser.add_argument('--input', default='Rohdaten', help='Input directory with raw CSVs')
-    parser.add_argument('--output', default='Features', help='Output directory for feature folders')
-    args = parser.parse_args()
-    run_pipeline(args.input, args.output)
 

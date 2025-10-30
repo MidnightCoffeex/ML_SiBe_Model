@@ -12,7 +12,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src import data_pipeline
 
 
-LOCKED_BASE = ['F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe', 'EoD_Bestand_noSiBe', 'WBZ_Days']
+LOCKED_BASE = ['F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe', 'EoD_Bestand_noSiBe', 'WBZ_Days', 'Price_Material_var']
 
 
 class ScrollableFrame(tk.Frame):
@@ -172,4 +172,5 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
 
