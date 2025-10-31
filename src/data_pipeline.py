@@ -217,29 +217,31 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
     """
     column_map = _load_column_map(xlsx_path)
     tables = load_all_tables(raw_dir, column_map)
-    # Build a per-Teil price map from TeileWert (last known price across exports)
+    # Preis-Map (ohne Datum) aus TeileWert: exakte Spalte 'DPr Material var'
+    price_map_tw: dict[str, float] = {}
+    try:
+        if 'TeileWert' in tables:
+            _tw = tables['TeileWert']
+            if 'Teil' in _tw.columns and 'DPr Material var' in _tw.columns:
+                vals = pd.to_numeric(_tw['DPr Material var'], errors='coerce')
+                for i, v in vals.items():
+                    if pd.notna(v):
+                        price_map_tw[str(_tw.loc[i, 'Teil'])] = float(v)
+    except Exception:
+        price_map_tw = {}
+    # Build a per-Teil price map from TeileWert using exact column 'DPr Material var'
+    # No date usage: take the last non-null value encountered per part across all rows/files
     price_map: dict[str, float] = {}
     try:
         if 'TeileWert' in tables:
             tw_all = tables['TeileWert'].copy()
-            # Detect the price column robustly
-            price_col = None
-            for c in tw_all.columns:
-                lc = str(c).lower()
-                if 'material' in lc and ('dpr' in lc or 'preis' in lc or 'wert' in lc):
-                    price_col = c
-                    break
-            if price_col is not None:
-                tw_all = tw_all[['Teil', 'ExportDatum', price_col]].copy()
-                tw_all.rename(columns={price_col: 'Price_Material_var'}, inplace=True)
-                tw_all['ExportDatum'] = pd.to_datetime(tw_all['ExportDatum'], errors='coerce')
-                tw_all = tw_all.dropna(subset=['ExportDatum'])
-                tw_all['Price_Material_var'] = pd.to_numeric(tw_all['Price_Material_var'], errors='coerce')
-                # take last by ExportDatum per Teil
-                tw_all = tw_all.sort_values(['Teil', 'ExportDatum']).groupby('Teil', as_index=False).last()
-                for _, r in tw_all.iterrows():
-                    if pd.notna(r['Price_Material_var']):
-                        price_map[str(r['Teil'])] = float(r['Price_Material_var'])
+            if 'DPr Material var' in tw_all.columns and 'Teil' in tw_all.columns:
+                # Ensure numeric conversion (commas already handled in loader, but be safe)
+                tw_all['DPr Material var'] = pd.to_numeric(tw_all['DPr Material var'], errors='coerce')
+                for _, r in tw_all[['Teil', 'DPr Material var']].iterrows():
+                    val = r['DPr Material var']
+                    if pd.notna(val):
+                        price_map[str(r['Teil'])] = float(val)
     except Exception:
         price_map = {}
 
@@ -292,12 +294,19 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             price_col = None
             for c in df_tw.columns:
                 lcs = str(c).lower()
-                if 'dpr' in lcs and 'material' in lcs and 'var' in lcs:
+                if ('dpr' in lcs) and (('wert' in lcs) or ('preis' in lcs)) and ('var' in lcs):
                     price_col = c
                     break
             if price_col is None:
                 for c in df_tw.columns:
-                    if 'material' in str(c).lower():
+                    lcs = str(c).lower()
+                    if ('dpr' in lcs) and (('wert' in lcs) or ('preis' in lcs)):
+                        price_col = c
+                        break
+            if price_col is None:
+                for c in df_tw.columns:
+                    lcs = str(c).lower()
+                    if ('material' in lcs) and (('wert' in lcs) or ('preis' in lcs)):
                         price_col = c
                         break
             if price_col is not None:
@@ -453,20 +462,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         else:
             feat['Hinterlegter SiBe'] = 0
 
-        # Materialpreis asof-join (falls vorhanden)
-        if 'TeileWert' in data:
-            tw = data['TeileWert'][['Datum', 'Price_Material_var']].copy()
-            if not tw.empty:
-                tw = tw.dropna(subset=['Datum']).sort_values('Datum')
-                feat = pd.merge_asof(feat.sort_values('Datum'), tw, on='Datum', direction='backward')
-                # Konstante Füllung: letzter bekannter Preis pro Teil in alle Zeilen
-                try:
-                    _pv = pd.to_numeric(tw['Price_Material_var'], errors='coerce').dropna()
-                    if not _pv.empty:
-                        feat['Price_Material_var'] = float(_pv.iloc[-1])
-                except Exception:
-                    pass
-        # Stelle sicher, dass die Spalte immer existiert (auch ohne TeileWert)
+        # Stelle sicher, dass die Spalte existiert und konstant pro Teil gesetzt wird (ohne Datum)
         if 'Price_Material_var' not in feat.columns:
             feat['Price_Material_var'] = np.nan
         # Fülle konstanten Preis aus globaler Map (falls verfügbar)
@@ -976,6 +972,18 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
     """
     column_map = _load_column_map(xlsx_path)
     tables = load_all_tables(raw_dir, column_map)
+    # Preis-Map (ohne Datum) aus TeileWert: exakte Spalte 'DPr Material var'
+    price_map_tw: dict[str, float] = {}
+    try:
+        if 'TeileWert' in tables:
+            _tw = tables['TeileWert']
+            if 'Teil' in _tw.columns and 'DPr Material var' in _tw.columns:
+                vals = pd.to_numeric(_tw['DPr Material var'], errors='coerce')
+                for i, v in vals.items():
+                    if pd.notna(v):
+                        price_map_tw[str(_tw.loc[i, 'Teil'])] = float(v)
+    except Exception:
+        price_map_tw = {}
     # Determine latest export date across loaded tables (cut for train/test split)
     export_dates: list[pd.Timestamp] = []
     for _df in tables.values():
@@ -1015,9 +1023,23 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
         elif name == 'TeileWert':
             df_tw = df.copy()
             price_col = None
+            # Prio 1: dpr + (wert|preis) + var
             for c in df_tw.columns:
-                if 'material' in str(c).lower() and ('dpr' in str(c).lower() or 'preis' in str(c).lower() or 'wert' in str(c).lower()):
+                lcs = str(c).lower()
+                if ('dpr' in lcs) and (('wert' in lcs) or ('preis' in lcs)) and ('var' in lcs):
                     price_col = c; break
+            # Prio 2: dpr + (wert|preis)
+            if price_col is None:
+                for c in df_tw.columns:
+                    lcs = str(c).lower()
+                    if ('dpr' in lcs) and (('wert' in lcs) or ('preis' in lcs)):
+                        price_col = c; break
+            # Prio 3: material + (wert|preis)
+            if price_col is None:
+                for c in df_tw.columns:
+                    lcs = str(c).lower()
+                    if ('material' in lcs) and (('wert' in lcs) or ('preis' in lcs)):
+                        price_col = c; break
             if price_col is not None:
                 df_tw = df_tw[['Teil','ExportDatum',price_col]].copy()
                 df_tw.rename(columns={price_col:'Price_Material_var','ExportDatum':'Datum'}, inplace=True)
@@ -1100,9 +1122,12 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
             feat['EoD_Bestand'] = pd.to_numeric(feat['Lagerbestand'], errors='coerce').ffill()
         feat['EoD_Bestand'] = pd.to_numeric(feat['EoD_Bestand'], errors='coerce').fillna(0)
         # Preis (TeileWert) asof-Join\n        if 'TeileWert' in data:\n            tw = data['TeileWert'][['Datum','Price_Material_var']].copy()\n            if not tw.empty:\n                tw = tw.dropna(subset=['Datum']).sort_values('Datum')\n                feat = pd.merge_asof(feat.sort_values('Datum'), tw, on='Datum', direction='backward')\n                # Konstante Füllung pro Teil: nimm letzten bekannten Preiswert\n                try:\n                    _p = pd.to_numeric(tw['Price_Material_var'], errors='coerce').dropna()\n                    if not _p.empty:\n                        feat['Price_Material_var'] = float(_p.iloc[-1])\n                except Exception:\n                    pass\n
-        # Stelle sicher, dass die Spalte immer existiert (auch ohne TeileWert)
+        # Stelle sicher, dass die Spalte immer existiert und konstant gesetzt wird (ohne TeileWert-Datum)
         if 'Price_Material_var' not in feat.columns:
             feat['Price_Material_var'] = np.nan
+        _pconst2 = price_map_tw.get(str(part))
+        if _pconst2 is not None:
+            feat['Price_Material_var'] = float(_pconst2)
 
         # SiBe Verlauf (asof)
         if 'SiBeVerlauf' in data:
