@@ -83,6 +83,9 @@ def main() -> None:
                 plot_dir = base_plot_dir / p
                 plot_dir.mkdir(parents=True, exist_ok=True)
                 evaluate_model.run_evaluation(str(features_path), str(model_path), target_list, str(plot_dir), args.raw, model_type=args.model_type, selected_features=None)
+            # After per-part evaluations, build aggregate HTML in 'Alle_Teile'
+            agg_dir = base_plot_dir / 'Alle_Teile'
+            evaluate_model.aggregate_all_parts(str(base_plot_dir), str(agg_dir))
             return
 
     features_path = Path(args.features) / eval_part / 'features.parquet'

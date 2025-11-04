@@ -401,6 +401,196 @@ def run_evaluation(
         fig_hist.write_html(Path(output_dir) / "training_history.html")
 
 
+
+def aggregate_all_parts(parts_root: str, out_dir: str) -> None:
+    """Aggregate all part-level `Full_Time_predictions` into a combined HTML report."""
+    root = Path(parts_root)
+    outp = Path(out_dir)
+    outp.mkdir(parents=True, exist_ok=True)
+
+    collected: list[tuple[str, pd.DataFrame]] = []
+    pred_name: Optional[str] = None
+    global_min: Optional[pd.Timestamp] = None
+    global_max: Optional[pd.Timestamp] = None
+
+    for sub in sorted([p for p in root.iterdir() if p.is_dir()]):
+        if sub.name.lower() == 'alle_teile':
+            continue
+
+        csv_path = sub / 'Full_Time_predictions.csv'
+        xlsx_path = sub / 'Full_Time_predictions.xlsx'
+        df: Optional[pd.DataFrame] = None
+        if csv_path.exists():
+            try:
+                df = pd.read_csv(csv_path)
+            except Exception:
+                df = None
+        if df is None and xlsx_path.exists():
+            try:
+                df = pd.read_excel(xlsx_path)
+            except Exception:
+                df = None
+        if df is None or df.empty:
+            continue
+
+        df['Datum'] = pd.to_datetime(df['Datum'], errors='coerce')
+        df = df.dropna(subset=['Datum'])
+        if df.empty:
+            continue
+
+        if 'Hinterlegter SiBe' not in df.columns:
+            for cand in ('Hinterlegter_SiBe', 'F_NiU_Hinterlegter SiBe', 'nF_Hinterlegter SiBe'):
+                if cand in df.columns:
+                    df['Hinterlegter SiBe'] = df[cand]
+                    break
+        if 'Hinterlegter SiBe' not in df.columns:
+            continue
+
+        pred_cols = [c for c in df.columns if isinstance(c, str) and c.startswith('pred_')]
+        if not pred_cols:
+            continue
+        if 'pred_L_WBZ_BlockMinAbs' in pred_cols:
+            pred_col = 'pred_L_WBZ_BlockMinAbs'
+        else:
+            pred_col = pred_cols[0]
+        if pred_name is None:
+            pred_name = pred_col
+
+        price_col = 'Price_Material_var'
+        if price_col not in df.columns:
+            df[price_col] = 0.0
+
+        base_cols = ['Datum', 'Hinterlegter SiBe', pred_col, price_col]
+        if 'Teil' in df.columns:
+            base_cols.insert(0, 'Teil')
+        df = df[base_cols].copy()
+        if 'Teil' not in df.columns:
+            df['Teil'] = sub.name
+        df['Teil'] = df['Teil'].astype(str).replace({"": sub.name}).fillna(sub.name)
+
+        df['Hinterlegter SiBe'] = pd.to_numeric(df['Hinterlegter SiBe'], errors='coerce').fillna(0.0)
+        df[pred_col] = pd.to_numeric(df[pred_col], errors='coerce').fillna(0.0)
+        df[price_col] = pd.to_numeric(df[price_col], errors='coerce').fillna(0.0)
+
+        part_min = df['Datum'].min()
+        part_max = df['Datum'].max()
+        global_min = part_min if global_min is None else min(global_min, part_min)
+        global_max = part_max if global_max is None else max(global_max, part_max)
+
+        collected.append((pred_col, df))
+
+    if not collected or pred_name is None or global_min is None or global_max is None:
+        return
+
+    full_index = pd.date_range(global_min, global_max, freq='D')
+    long_frames: list[pd.DataFrame] = []
+    for part_pred_name, df in collected:
+        pred_col = part_pred_name
+        df = df.sort_values('Datum')
+        df = df.set_index('Datum').reindex(full_index)
+        df['Teil'] = df['Teil'].ffill().bfill()
+        df[['Hinterlegter SiBe', pred_col, 'Price_Material_var']] = (
+            df[['Hinterlegter SiBe', pred_col, 'Price_Material_var']]
+            .ffill()
+            .bfill()
+            .fillna(0.0)
+        )
+        df = df.reset_index().rename(columns={'index': 'Datum'})
+        if 'Teil' not in df.columns:
+            df['Teil'] = ''
+        df['Kapitalbindung_Hinterlegter'] = df['Hinterlegter SiBe'] * df['Price_Material_var']
+        df['Kapitalbindung_Vorgeschlagen'] = df[pred_col] * df['Price_Material_var']
+        if pred_col != pred_name:
+            df[pred_name] = df[pred_col]
+            df.drop(columns=[pred_col], inplace=True)
+        long_frames.append(df[['Teil', 'Datum', 'Hinterlegter SiBe', pred_name,
+                               'Price_Material_var', 'Kapitalbindung_Hinterlegter',
+                               'Kapitalbindung_Vorgeschlagen']])
+
+    long_df = pd.concat(long_frames, ignore_index=True)
+
+    helper_path = outp / 'Alle_Teile_Tageswerte.xlsx'
+    try:
+        long_df.to_excel(helper_path, index=False)
+    except Exception:
+        long_df.to_csv(helper_path.with_suffix('.csv'), index=False)
+
+    daily = (
+        long_df.groupby('Datum', as_index=False)
+        .agg({
+            'Hinterlegter SiBe': 'sum',
+            pred_name: 'sum',
+            'Kapitalbindung_Hinterlegter': 'sum',
+            'Kapitalbindung_Vorgeschlagen': 'sum',
+        })
+        .sort_values('Datum')
+    )
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.12,
+        subplot_titles=(
+            'Hinterlegter vs Vorgeschlagener SiBe (Summe)',
+            'Kapitalbindung (Summe)',
+        ),
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=daily['Datum'],
+            y=daily['Hinterlegter SiBe'],
+            mode='lines',
+            name='Hinterlegter SiBe',
+            line=dict(color='blue'),
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=daily['Datum'],
+            y=daily[pred_name],
+            mode='lines',
+            name='Vorgeschlagener SiBe',
+            line=dict(color='green'),
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=daily['Datum'],
+            y=daily['Kapitalbindung_Hinterlegter'],
+            mode='lines',
+            name='Kapitalbindung (Hinterlegter SiBe)',
+            line=dict(color='blue'),
+        ),
+        row=2,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=daily['Datum'],
+            y=daily['Kapitalbindung_Vorgeschlagen'],
+            mode='lines',
+            name='Kapitalbindung (Vorgeschlagener SiBe)',
+            line=dict(color='orange'),
+        ),
+        row=2,
+        col=1,
+    )
+    fig.update_layout(
+        title='Alle Teile - Aggregierte Entwicklung',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+    )
+    fig.update_xaxes(title_text='Datum', row=1, col=1)
+    fig.update_xaxes(title_text='Datum', row=2, col=1)
+    fig.update_yaxes(title_text='Summe SiBe', row=1, col=1)
+    fig.update_yaxes(title_text='EUR (aggregiert)', row=2, col=1)
+    fig.write_html(outp / 'Alle_Teile.html')
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate trained model")
     parser.add_argument(
