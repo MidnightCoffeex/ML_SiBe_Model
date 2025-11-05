@@ -408,7 +408,7 @@ def aggregate_all_parts(parts_root: str, out_dir: str) -> None:
     outp = Path(out_dir)
     outp.mkdir(parents=True, exist_ok=True)
 
-    collected: list[tuple[str, pd.DataFrame]] = []
+    raw_frames: list[pd.DataFrame] = []
     pred_name: Optional[str] = None
     global_min: Optional[pd.Timestamp] = None
     global_max: Optional[pd.Timestamp] = None
@@ -477,46 +477,78 @@ def aggregate_all_parts(parts_root: str, out_dir: str) -> None:
         global_min = part_min if global_min is None else min(global_min, part_min)
         global_max = part_max if global_max is None else max(global_max, part_max)
 
-        collected.append((pred_col, df))
+        df = df.sort_values('Datum')
+        raw = df[['Teil', 'Datum', 'Hinterlegter SiBe', pred_col, price_col]].copy()
+        raw.rename(columns={pred_col: pred_name or pred_col}, inplace=True)
+        raw['Kapitalbindung_Hinterlegter'] = raw['Hinterlegter SiBe'] * raw[price_col]
+        raw['Kapitalbindung_Vorgeschlagen'] = raw[pred_name or pred_col] * raw[price_col]
+        if pred_name is None:
+            pred_name = pred_col
+        raw_frames.append(raw[['Teil', 'Datum', 'Hinterlegter SiBe', pred_name,
+                               price_col, 'Kapitalbindung_Hinterlegter',
+                               'Kapitalbindung_Vorgeschlagen']])
 
-    if not collected or pred_name is None or global_min is None or global_max is None:
+    if not raw_frames or pred_name is None or global_min is None or global_max is None:
         return
 
     full_index = pd.date_range(global_min, global_max, freq='D')
-    long_frames: list[pd.DataFrame] = []
-    for part_pred_name, df in collected:
-        pred_col = part_pred_name
-        df = df.sort_values('Datum')
-        df = df.set_index('Datum').reindex(full_index)
-        df['Teil'] = df['Teil'].ffill().bfill()
-        df[['Hinterlegter SiBe', pred_col, 'Price_Material_var']] = (
-            df[['Hinterlegter SiBe', pred_col, 'Price_Material_var']]
+
+    def _build_top_hover(source_df: pd.DataFrame, value_col: str, dates: list[pd.Timestamp]) -> list[str]:
+        grouped = (
+            source_df.groupby(['Datum', 'Teil'])[value_col]
+            .sum()
+            .reset_index()
+        )
+        if grouped.empty:
+            return ["Keine Kapitalbindung" for _ in dates]
+        grouped['Datum'] = pd.to_datetime(grouped['Datum'])
+        total_by_date = grouped.groupby('Datum')[value_col].sum()
+        grouped_dict = {dt: g for dt, g in grouped.groupby('Datum')}
+        hover_texts: list[str] = []
+        for date in dates:
+            dt = pd.Timestamp(date)
+            grp = grouped_dict.get(dt)
+            total_val = float(total_by_date.get(dt, 0.0))
+            if grp is None or total_val <= 0:
+                hover_texts.append("Keine Kapitalbindung")
+                continue
+            top = grp.sort_values(value_col, ascending=False).head(3)
+            lines = []
+            for rank, row in enumerate(top.itertuples(), 1):
+                val = float(getattr(row, value_col))
+                pct = (val / total_val * 100.0) if total_val else 0.0
+                lines.append(f"{rank}) Teil {row.Teil}: {val:,.0f} ({pct:.1f}%)")
+            hover_texts.append("<br>".join(lines))
+        return hover_texts
+    forward_frames: list[pd.DataFrame] = []
+    for raw in raw_frames:
+        part_id = raw['Teil'].iloc[0] if not raw.empty else ''
+        df_fwd = raw[['Teil', 'Datum', 'Hinterlegter SiBe', pred_name, 'Price_Material_var']].copy()
+        df_fwd = df_fwd.set_index('Datum').reindex(full_index)
+        df_fwd['Teil'] = df_fwd['Teil'].ffill().bfill().fillna(part_id)
+        df_fwd[['Hinterlegter SiBe', pred_name, 'Price_Material_var']] = (
+            df_fwd[['Hinterlegter SiBe', pred_name, 'Price_Material_var']]
             .ffill()
             .bfill()
             .fillna(0.0)
         )
-        df = df.reset_index().rename(columns={'index': 'Datum'})
-        if 'Teil' not in df.columns:
-            df['Teil'] = ''
-        df['Kapitalbindung_Hinterlegter'] = df['Hinterlegter SiBe'] * df['Price_Material_var']
-        df['Kapitalbindung_Vorgeschlagen'] = df[pred_col] * df['Price_Material_var']
-        if pred_col != pred_name:
-            df[pred_name] = df[pred_col]
-            df.drop(columns=[pred_col], inplace=True)
-        long_frames.append(df[['Teil', 'Datum', 'Hinterlegter SiBe', pred_name,
-                               'Price_Material_var', 'Kapitalbindung_Hinterlegter',
-                               'Kapitalbindung_Vorgeschlagen']])
+        df_fwd = df_fwd.rename_axis('Datum').reset_index()
+        df_fwd['Kapitalbindung_Hinterlegter'] = df_fwd['Hinterlegter SiBe'] * df_fwd['Price_Material_var']
+        df_fwd['Kapitalbindung_Vorgeschlagen'] = df_fwd[pred_name] * df_fwd['Price_Material_var']
+        forward_frames.append(df_fwd[['Teil', 'Datum', 'Hinterlegter SiBe', pred_name,
+                                      'Price_Material_var', 'Kapitalbindung_Hinterlegter',
+                                      'Kapitalbindung_Vorgeschlagen']])
 
-    long_df = pd.concat(long_frames, ignore_index=True)
+    long_df_forward = pd.concat(forward_frames, ignore_index=True)
 
     helper_path = outp / 'Alle_Teile_Tageswerte.xlsx'
     try:
-        long_df.to_excel(helper_path, index=False)
+        long_df_forward.to_excel(helper_path, index=False)
     except Exception:
-        long_df.to_csv(helper_path.with_suffix('.csv'), index=False)
+        long_df_forward.to_csv(helper_path.with_suffix('.csv'), index=False)
 
     daily = (
-        long_df.groupby('Datum', as_index=False)
+        long_df_forward.groupby('Datum', as_index=False)
         .agg({
             'Hinterlegter SiBe': 'sum',
             pred_name: 'sum',
@@ -525,6 +557,10 @@ def aggregate_all_parts(parts_root: str, out_dir: str) -> None:
         })
         .sort_values('Datum')
     )
+
+    daily_dates = list(daily['Datum'])
+    hover_forward_actual = _build_top_hover(long_df_forward, 'Kapitalbindung_Hinterlegter', daily_dates)
+    hover_forward_pred = _build_top_hover(long_df_forward, 'Kapitalbindung_Vorgeschlagen', daily_dates)
 
     fig = make_subplots(
         rows=2,
@@ -565,6 +601,8 @@ def aggregate_all_parts(parts_root: str, out_dir: str) -> None:
             mode='lines',
             name='Kapitalbindung (Hinterlegter SiBe)',
             line=dict(color='blue'),
+            customdata=hover_forward_actual,
+            hovertemplate="Kapitalbindung (Hinterlegter SiBe): %{y:,.0f}<br>%{customdata}<extra></extra>",
         ),
         row=2,
         col=1,
@@ -576,6 +614,8 @@ def aggregate_all_parts(parts_root: str, out_dir: str) -> None:
             mode='lines',
             name='Kapitalbindung (Vorgeschlagener SiBe)',
             line=dict(color='orange'),
+            customdata=hover_forward_pred,
+            hovertemplate="Kapitalbindung (Vorgeschlagener SiBe): %{y:,.0f}<br>%{customdata}<extra></extra>",
         ),
         row=2,
         col=1,
@@ -589,6 +629,103 @@ def aggregate_all_parts(parts_root: str, out_dir: str) -> None:
     fig.update_yaxes(title_text='Summe SiBe', row=1, col=1)
     fig.update_yaxes(title_text='EUR (aggregiert)', row=2, col=1)
     fig.write_html(outp / 'Alle_Teile.html')
+
+    # No-forward variant (no datum carry-forward)
+    long_df_no_forward = pd.concat(raw_frames, ignore_index=True)
+    helper_path_no_forward = outp / 'Alle_Teile_Tageswerte_no_forward.xlsx'
+    try:
+        long_df_no_forward.to_excel(helper_path_no_forward, index=False)
+    except Exception:
+        long_df_no_forward.to_csv(helper_path_no_forward.with_suffix('.csv'), index=False)
+
+    daily_no_forward = (
+        long_df_no_forward.groupby('Datum', as_index=False)
+        .agg({
+            'Hinterlegter SiBe': 'sum',
+            pred_name: 'sum',
+            'Kapitalbindung_Hinterlegter': 'sum',
+            'Kapitalbindung_Vorgeschlagen': 'sum',
+        })
+        .sort_values('Datum')
+    )
+    daily_no_forward = (
+        daily_no_forward.set_index('Datum')
+        .reindex(full_index, fill_value=0.0)
+        .rename_axis('Datum')
+        .reset_index()
+    )
+
+    daily_dates_no_forward = list(daily_no_forward['Datum'])
+    hover_no_forward_actual = _build_top_hover(long_df_no_forward, 'Kapitalbindung_Hinterlegter', daily_dates_no_forward)
+    hover_no_forward_pred = _build_top_hover(long_df_no_forward, 'Kapitalbindung_Vorgeschlagen', daily_dates_no_forward)
+
+    fig_no_forward = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.12,
+        subplot_titles=(
+            'Hinterlegter vs Vorgeschlagener SiBe (Summe, ohne Forward-Fill)',
+            'Kapitalbindung (Summe, ohne Forward-Fill)',
+        ),
+    )
+    fig_no_forward.add_trace(
+        go.Scatter(
+            x=daily_no_forward['Datum'],
+            y=daily_no_forward['Hinterlegter SiBe'],
+            mode='lines',
+            name='Hinterlegter SiBe',
+            line=dict(color='blue'),
+        ),
+        row=1,
+        col=1,
+    )
+    fig_no_forward.add_trace(
+        go.Scatter(
+            x=daily_no_forward['Datum'],
+            y=daily_no_forward[pred_name],
+            mode='lines',
+            name='Vorgeschlagener SiBe',
+            line=dict(color='green'),
+        ),
+        row=1,
+        col=1,
+    )
+    fig_no_forward.add_trace(
+        go.Scatter(
+            x=daily_no_forward['Datum'],
+            y=daily_no_forward['Kapitalbindung_Hinterlegter'],
+            mode='lines',
+            name='Kapitalbindung (Hinterlegter SiBe)',
+            line=dict(color='blue'),
+            customdata=hover_no_forward_actual,
+            hovertemplate="Kapitalbindung (Hinterlegter SiBe): %{y:,.0f}<br>%{customdata}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    fig_no_forward.add_trace(
+        go.Scatter(
+            x=daily_no_forward['Datum'],
+            y=daily_no_forward['Kapitalbindung_Vorgeschlagen'],
+            mode='lines',
+            name='Kapitalbindung (Vorgeschlagener SiBe)',
+            line=dict(color='orange'),
+            customdata=hover_no_forward_pred,
+            hovertemplate="Kapitalbindung (Vorgeschlagener SiBe): %{y:,.0f}<br>%{customdata}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    fig_no_forward.update_layout(
+        title='Alle Teile - Aggregierte Entwicklung (ohne Forward-Fill)',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+    )
+    fig_no_forward.update_xaxes(title_text='Datum', row=1, col=1)
+    fig_no_forward.update_xaxes(title_text='Datum', row=2, col=1)
+    fig_no_forward.update_yaxes(title_text='Summe SiBe', row=1, col=1)
+    fig_no_forward.update_yaxes(title_text='EUR (aggregiert)', row=2, col=1)
+    fig_no_forward.write_html(outp / 'Alle_Teile_no_forward.html')
 
 
 if __name__ == "__main__":
