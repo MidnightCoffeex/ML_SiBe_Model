@@ -6,7 +6,6 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src import evaluate_model
 from src import train_model
-import sys
 
 # Ensure UTF-8 output for proper Umlaut rendering
 try:
@@ -78,14 +77,43 @@ def main() -> None:
                 args.plots = input("Ordner für Ergebnisse [plots]: ") or "plots"
             base_plot_dir = Path(args.plots) / args.part / args.model_type / args.model_id
             target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
+            aggregate_inputs: dict[str, object] = {}
             for p in parts:
                 features_path = Path(args.features) / p / 'features.parquet'
                 plot_dir = base_plot_dir / p
                 plot_dir.mkdir(parents=True, exist_ok=True)
-                evaluate_model.run_evaluation(str(features_path), str(model_path), target_list, str(plot_dir), args.raw, model_type=args.model_type, selected_features=None)
+                result_bundle = evaluate_model.run_evaluation(
+                    str(features_path),
+                    str(model_path),
+                    target_list,
+                    str(plot_dir),
+                    args.raw,
+                    model_type=args.model_type,
+                    selected_features=None,
+                )
+                html_file = plot_dir / "Dispo_Time_predictions_over_time.html"
+                xlsx_file = plot_dir / "Dispo_Time_predictions.xlsx"
+                csv_file = plot_dir / "Dispo_Time_predictions.csv"
+                allowed_files = {html_file.name}
+                table_name = None
+                if xlsx_file.exists():
+                    table_name = xlsx_file.name
+                    allowed_files.add(table_name)
+                elif csv_file.exists():
+                    table_name = csv_file.name
+                    allowed_files.add(table_name)
+                has_dispo_output = html_file.exists() and table_name is not None
+                if isinstance(result_bundle, dict):
+                    full_frame = result_bundle.get("full")
+                    if full_frame is not None:
+                        aggregate_inputs[p] = full_frame
+                if has_dispo_output:
+                    for child in plot_dir.iterdir():
+                        if child.name not in allowed_files and child.is_file():
+                            child.unlink()
             # After per-part evaluations, build aggregate HTML in 'Alle_Teile'
             agg_dir = base_plot_dir / 'Alle_Teile'
-            evaluate_model.aggregate_all_parts(str(base_plot_dir), str(agg_dir))
+            evaluate_model.aggregate_all_parts(aggregate_inputs, str(agg_dir))
             return
 
     features_path = Path(args.features) / eval_part / 'features.parquet'

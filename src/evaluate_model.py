@@ -56,11 +56,23 @@ def _resolve_col(df: pd.DataFrame, base: str) -> Optional[str]:
 
 
 def _evaluate_range(
-    results: pd.DataFrame, prefix: str, target: str, output_dir: str
-) -> None:
-    """Save predictions and plots for a given subset."""
+    results: pd.DataFrame,
+    prefix: str,
+    target: str,
+    output_dir: str,
+    *,
+    table_mode: str = "both",
+    export_scatter_plots: bool = True,
+    export_static_timeline: bool = True,
+    export_interactive_timeline: bool = True,
+) -> pd.DataFrame | None:
+    """Save predictions and plots for a given subset.
+
+    Returns the (potentially enriched) ``results`` DataFrame so callers may reuse
+    the predictions without relying on exported files.
+    """
     if results.empty:
-        return
+        return None
     results = results.sort_values("Datum")
     pred_col = f"pred_{target}"
 
@@ -91,200 +103,219 @@ def _evaluate_range(
     )
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    results.to_csv(Path(output_dir) / f"{prefix}_predictions.csv", index=False)
-    try:
-        results.to_excel(Path(output_dir) / f"{prefix}_predictions.xlsx", index=False)
-    except Exception:
-        pass
-
-    plt.figure()
-    sns.scatterplot(x=results[actual_col], y=results[pred_col])
-    plt.xlabel(name_actual_sibe)
-    plt.ylabel(name_pred)
-    plt.title(f"{heading}\nAktueller SiBe vs. Vorschlag" if heading else "Aktueller SiBe vs. Vorschlag")
-    plt.tight_layout()
-    plt.savefig(Path(output_dir) / f"{prefix}_actual_vs_pred.png")
-    plt.close()
-
-    fig = px.scatter(
-        results,
-        x=actual_col,
-        y=pred_col,
-        labels={actual_col: name_actual_sibe, pred_col: name_pred},
-        title=f"{heading} | Aktueller SiBe vs. Vorschlag" if heading else "Aktueller SiBe vs. Vorschlag",
-    )
-    fig.write_html(Path(output_dir) / f"{prefix}_actual_vs_pred.html")
-
-    plt.figure()
-    sns.lineplot(x="Datum", y=actual_col, data=results, label="Actual")
-    sns.lineplot(x="Datum", y=pred_col, data=results, label="Predicted")
-    plt.xlabel("Date")
-    plt.ylabel(target)
-    plt.title("Predictions Over Time")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.savefig(Path(output_dir) / f"{prefix}_predictions_over_time.png")
-    plt.close()
-
-    # Prepare an upper-envelope (peak) curve of the clamped predictions
-    pred_col = f"pred_{target}"
-    dates_series = pd.to_datetime(results["Datum"], errors="coerce")
-    if not dates_series.empty:
-        start_date = dates_series.min().normalize()
-        boundaries = [start_date]
-        current = start_date
-        while current <= dates_series.max():
-            current = current + pd.DateOffset(months=3)
-            boundaries.append(current)
-        boundaries = sorted(set(boundaries))
-        block_idx = pd.cut(
-            dates_series,
-            bins=boundaries,
-            right=False,
-            labels=False,
-            include_lowest=True,
-        )
-        results["_quarter_block"] = block_idx.astype("Int64")
-        results["pred_peak_curve"] = results.groupby("_quarter_block")[pred_col].transform("max")
-        results.drop(columns=["_quarter_block"], inplace=True)
-    else:
-        results["pred_peak_curve"] = results[pred_col]
-
-    fig2 = make_subplots(
-        rows=5,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.1,
-        subplot_titles=(
-            "Vorschlag ueber die Zeit",
-            name_eod,
-            name_combined,
-            name_peak,
-            name_peak_combined,
-        ),
-    )
-    fig2.add_trace(
-        go.Scatter(
-            x=results["Datum"],
-            y=results[actual_col],
-            mode="lines",
-            name=name_actual_sibe,
-        ),
-        row=1,
-        col=1,
-    )
-    # Overlay the actual training label as a medium-light gray line (if present)
-    if target in results.columns:
+    mode = (table_mode or "none").lower()
+    csv_path = Path(output_dir) / f"{prefix}_predictions.csv"
+    xlsx_path = Path(output_dir) / f"{prefix}_predictions.xlsx"
+    if mode not in {"none", "csv", "xlsx", "both"}:
+        raise ValueError(f"Unsupported table_mode '{table_mode}'")
+    if mode in {"csv", "both"}:
+        results.to_csv(csv_path, index=False)
+    if mode in {"xlsx", "both"}:
         try:
-            lab_series = pd.to_numeric(results[target], errors="coerce")
+            results.to_excel(xlsx_path, index=False)
+            if mode == "xlsx" and csv_path.exists():
+                csv_path.unlink(missing_ok=True)
         except Exception:
-            lab_series = results[target]
+            if mode == "xlsx":
+                results.to_csv(csv_path, index=False)
+                if xlsx_path.exists():
+                    xlsx_path.unlink(missing_ok=True)
+    if mode == "csv" and xlsx_path.exists():
+        xlsx_path.unlink(missing_ok=True)
+
+    if export_scatter_plots:
+        plt.figure()
+        sns.scatterplot(x=results[actual_col], y=results[pred_col])
+        plt.xlabel(name_actual_sibe)
+        plt.ylabel(name_pred)
+        plt.title(f"{heading}\nAktueller SiBe vs. Vorschlag" if heading else "Aktueller SiBe vs. Vorschlag")
+        plt.tight_layout()
+        plt.savefig(Path(output_dir) / f"{prefix}_actual_vs_pred.png")
+        plt.close()
+
+        fig = px.scatter(
+            results,
+            x=actual_col,
+            y=pred_col,
+            labels={actual_col: name_actual_sibe, pred_col: name_pred},
+            title=f"{heading} | Aktueller SiBe vs. Vorschlag" if heading else "Aktueller SiBe vs. Vorschlag",
+        )
+        fig.write_html(Path(output_dir) / f"{prefix}_actual_vs_pred.html")
+
+    if export_static_timeline:
+        plt.figure()
+        sns.lineplot(x="Datum", y=actual_col, data=results, label="Actual")
+        sns.lineplot(x="Datum", y=pred_col, data=results, label="Predicted")
+        plt.xlabel("Date")
+        plt.ylabel(target)
+        plt.title("Predictions Over Time")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(Path(output_dir) / f"{prefix}_predictions_over_time.png")
+        plt.close()
+
+    if export_interactive_timeline:
+        # Prepare an upper-envelope (peak) curve of the clamped predictions
+        pred_col = f"pred_{target}"
+        dates_series = pd.to_datetime(results["Datum"], errors="coerce")
+        if not dates_series.empty:
+            start_date = dates_series.min().normalize()
+            boundaries = [start_date]
+            current = start_date
+            while current <= dates_series.max():
+                current = current + pd.DateOffset(months=3)
+                boundaries.append(current)
+            boundaries = sorted(set(boundaries))
+            block_idx = pd.cut(
+                dates_series,
+                bins=boundaries,
+                right=False,
+                labels=False,
+                include_lowest=True,
+            )
+            results["_quarter_block"] = block_idx.astype("Int64")
+            results["pred_peak_curve"] = results.groupby("_quarter_block")[pred_col].transform("max")
+            results.drop(columns=["_quarter_block"], inplace=True)
+        else:
+            results["pred_peak_curve"] = results[pred_col]
+
+        fig2 = make_subplots(
+            rows=5,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.1,
+            subplot_titles=(
+                "Vorschlag ueber die Zeit",
+                name_eod,
+                name_combined,
+                name_peak,
+                name_peak_combined,
+            ),
+        )
         fig2.add_trace(
             go.Scatter(
                 x=results["Datum"],
-                y=lab_series,
+                y=results[actual_col],
                 mode="lines",
-                name=f"Label: {target}",
-                line=dict(color="#B0B0B0"),
+                name=name_actual_sibe,
             ),
             row=1,
             col=1,
         )
-    fig2.add_trace(
-        go.Scatter(
-            x=results["Datum"],
-            y=results[pred_col],
-            mode="lines",
-            name=name_pred,
-        ),
-        row=1,
-        col=1,
-    )
-    # EoD ohne SiBe (robust gegenueber NiU-Prefix)
-    eod_col = _resolve_col(results, "EoD_Bestand_noSiBe")
-    if eod_col:
+        # Overlay the actual training label as a medium-light gray line (if present)
+        if target in results.columns:
+            try:
+                lab_series = pd.to_numeric(results[target], errors="coerce")
+            except Exception:
+                lab_series = results[target]
+            fig2.add_trace(
+                go.Scatter(
+                    x=results["Datum"],
+                    y=lab_series,
+                    mode="lines",
+                    name=f"Label: {target}",
+                    line=dict(color="#B0B0B0"),
+                ),
+                row=1,
+                col=1,
+            )
         fig2.add_trace(
             go.Scatter(
                 x=results["Datum"],
-                y=results[eod_col],
+                y=results[pred_col],
                 mode="lines",
-                name=name_eod,
+                name=name_pred,
             ),
-            row=2,
+            row=1,
             col=1,
         )
+        # EoD ohne SiBe (robust gegenueber NiU-Prefix)
+        eod_col = _resolve_col(results, "EoD_Bestand_noSiBe")
+        if eod_col:
+            fig2.add_trace(
+                go.Scatter(
+                    x=results["Datum"],
+                    y=results[eod_col],
+                    mode="lines",
+                    name=name_eod,
+                ),
+                row=2,
+                col=1,
+            )
 
-    if eod_col:
-        combined = results[eod_col] + results[pred_col]
-        combined_pos = combined.where(combined > 0)
-        combined_neg = combined.where(combined <= 0)
+        if eod_col:
+            combined = results[eod_col] + results[pred_col]
+            combined_pos = combined.where(combined > 0)
+            combined_neg = combined.where(combined <= 0)
 
+            fig2.add_trace(
+                go.Scatter(
+                    x=results["Datum"],
+                    y=combined_pos,
+                    mode="lines",
+                    name=name_combined,
+                    line=dict(color="blue"),
+                ),
+                row=3,
+                col=1,
+            )
+            fig2.add_trace(
+                go.Scatter(
+                    x=results["Datum"],
+                    y=combined_neg,
+                    mode="lines",
+                    showlegend=False,
+                    line=dict(color="red"),
+                ),
+                row=3,
+                col=1,
+            )
+
+        # Row 4: peak curve of predictions
         fig2.add_trace(
             go.Scatter(
                 x=results["Datum"],
-                y=combined_pos,
+                y=results["pred_peak_curve"],
                 mode="lines",
-                name=name_combined,
-                line=dict(color="blue"),
+                name=name_peak,
+                line=dict(color="purple"),
             ),
-            row=3,
-            col=1,
-        )
-        fig2.add_trace(
-            go.Scatter(
-                x=results["Datum"],
-                y=combined_neg,
-                mode="lines",
-                showlegend=False,
-                line=dict(color="red"),
-            ),
-            row=3,
+            row=4,
             col=1,
         )
 
-    # Row 4: peak curve of predictions
-    fig2.add_trace(
-        go.Scatter(
-            x=results["Datum"],
-            y=results["pred_peak_curve"],
-            mode="lines",
-            name=name_peak,
-            line=dict(color="purple"),
-        ),
-        row=4,
-        col=1,
-    )
+        # Row 5: peak curve + EoD_Bestand_noSiBe
+        if eod_col:
+            combined2 = results[eod_col] + results["pred_peak_curve"]
+            fig2.add_trace(
+                go.Scatter(
+                    x=results["Datum"],
+                    y=combined2,
+                    mode="lines",
+                    name="Peak Curve + EoD_Bestand_noSiBe",
+                    line=dict(color="darkgreen"),
+                ),
+                row=5,
+                col=1,
+            )
 
-    # Row 5: peak curve + EoD_Bestand_noSiBe
-    if eod_col:
-        combined2 = results[eod_col] + results["pred_peak_curve"]
-        fig2.add_trace(
-            go.Scatter(
-                x=results["Datum"],
-                y=combined2,
-                mode="lines",
-                name="Peak Curve + EoD_Bestand_noSiBe",
-                line=dict(color="darkgreen"),
-            ),
-            row=5,
-            col=1,
+        fig2.update_layout(
+            hovermode="x unified",
+            height=1800,
+            title_text=(f"{heading} - Zeitverlauf" if heading else "Zeitverlauf"),
         )
+        fig2.update_yaxes(title_text=name_pred, row=1, col=1)
+        fig2.update_yaxes(title_text=name_eod, row=2, col=1)
+        fig2.update_yaxes(title_text=name_combined, row=3, col=1)
+        fig2.update_yaxes(title_text=name_peak, row=4, col=1)
+        fig2.update_yaxes(title_text=name_peak_combined, row=5, col=1)
+        fig2.update_xaxes(title_text="Datum", row=5, col=1)
+        fig2.write_html(Path(output_dir) / f"{prefix}_predictions_over_time.html")
 
-    fig2.update_layout(
-        hovermode="x unified",
-        height=1800,
-        title_text=(f"{heading} - Zeitverlauf" if heading else "Zeitverlauf"),
-    )
-    fig2.update_yaxes(title_text=name_pred, row=1, col=1)
-    fig2.update_yaxes(title_text=name_eod, row=2, col=1)
-    fig2.update_yaxes(title_text=name_combined, row=3, col=1)
-    fig2.update_yaxes(title_text=name_peak, row=4, col=1)
-    fig2.update_yaxes(title_text=name_peak_combined, row=5, col=1)
-    fig2.update_xaxes(title_text="Datum", row=5, col=1)
-    fig2.write_html(Path(output_dir) / f"{prefix}_predictions_over_time.html")
-    
-    # help GC
-    del fig2
+        # help GC
+        del fig2
+
+    return results
 
 
 def run_evaluation(
@@ -295,7 +326,7 @@ def run_evaluation(
     raw_dir: str = "Rohdaten",
     model_type: str | None = None,
     selected_features: list[str] | None = None,
-) -> None:
+) -> dict[str, pd.DataFrame | None] | None:
     """Evaluate the trained model and generate plots for multiple time frames."""
     if model_type is None:
         parts = set(Path(model_path).parts)
@@ -390,12 +421,59 @@ def run_evaluation(
 
     # Evaluation for specified ranges
     full_prefix = "Full_Time"
-    _evaluate_range(results_full, full_prefix, targets[0], output_dir)
+    results_full_view = _evaluate_range(
+        results_full,
+        full_prefix,
+        targets[0],
+        output_dir,
+        table_mode="none",
+        export_scatter_plots=False,
+        export_static_timeline=False,
+        export_interactive_timeline=False,
+    )
 
+    results_dispo_view: pd.DataFrame | None = None
     if dispo_start is not None and dispo_end is not None:
         mask = (results_full["Datum"] >= dispo_start) & (results_full["Datum"] <= dispo_end)
         dispo_results = results_full.loc[mask].copy()
-        _evaluate_range(dispo_results, "Dispo_Time", targets[0], output_dir)
+        results_dispo_view = _evaluate_range(
+            dispo_results,
+            "Dispo_Time",
+            targets[0],
+            output_dir,
+            table_mode="xlsx",
+            export_scatter_plots=False,
+            export_static_timeline=False,
+            export_interactive_timeline=True,
+        )
+        if results_dispo_view is None:
+            print(
+                f"Dispo-Zeitraum leer f�r Teil {part} -> nutze gesamten Verlauf f�r Ausgabe."
+            )
+            results_dispo_view = _evaluate_range(
+                results_full,
+                "Dispo_Time",
+                targets[0],
+                output_dir,
+                table_mode="xlsx",
+                export_scatter_plots=False,
+                export_static_timeline=False,
+                export_interactive_timeline=True,
+            )
+    else:
+        print(
+            f"Kein Dispo-Zeitraum f�r Teil {part} gefunden -> nutze gesamten Verlauf f�r Ausgabe."
+        )
+        results_dispo_view = _evaluate_range(
+            results_full,
+            "Dispo_Time",
+            targets[0],
+            output_dir,
+            table_mode="xlsx",
+            export_scatter_plots=False,
+            export_static_timeline=False,
+            export_interactive_timeline=True,
+        )
 
     # Training history from model
     if hasattr(model, "train_score_"):
@@ -416,11 +494,19 @@ def run_evaluation(
         )
         fig_hist.write_html(Path(output_dir) / "training_history.html")
 
+    return {
+        "part": part,
+        "full": results_full_view if results_full_view is not None else results_full,
+        "dispo": results_dispo_view,
+    }
 
 
-def aggregate_all_parts(parts_root: str, out_dir: str) -> None:
-    """Aggregate all part-level `Full_Time_predictions` into a combined HTML report."""
-    root = Path(parts_root)
+def aggregate_all_parts(results_by_part: dict[str, pd.DataFrame | None], out_dir: str) -> None:
+    """Aggregate part-level predictions that were returned by ``run_evaluation``."""
+    if not results_by_part:
+        print("Keine Ergebnisse zur Aggregation - ueberspringe.")
+        return
+
     outp = Path(out_dir)
     outp.mkdir(parents=True, exist_ok=True)
 
@@ -429,82 +515,63 @@ def aggregate_all_parts(parts_root: str, out_dir: str) -> None:
     global_min: Optional[pd.Timestamp] = None
     global_max: Optional[pd.Timestamp] = None
 
-    for sub in sorted([p for p in root.iterdir() if p.is_dir()]):
-        if sub.name.lower() == 'alle_teile':
-            continue
-
-        csv_path = sub / 'Full_Time_predictions.csv'
-        xlsx_path = sub / 'Full_Time_predictions.xlsx'
-        df: Optional[pd.DataFrame] = None
-        if csv_path.exists():
-            try:
-                df = pd.read_csv(csv_path)
-            except Exception:
-                df = None
-        if df is None and xlsx_path.exists():
-            try:
-                df = pd.read_excel(xlsx_path)
-            except Exception:
-                df = None
+    for part, df in sorted(results_by_part.items()):
         if df is None or df.empty:
             continue
-
-        df['Datum'] = pd.to_datetime(df['Datum'], errors='coerce')
-        df = df.dropna(subset=['Datum'])
-        if df.empty:
+        part_df = df.copy()
+        part_df['Datum'] = pd.to_datetime(part_df['Datum'], errors='coerce')
+        part_df = part_df.dropna(subset=['Datum'])
+        if part_df.empty:
             continue
 
-        if 'Hinterlegter SiBe' not in df.columns:
+        if 'Hinterlegter SiBe' not in part_df.columns:
             for cand in ('Hinterlegter_SiBe', 'F_NiU_Hinterlegter SiBe', 'nF_Hinterlegter SiBe'):
-                if cand in df.columns:
-                    df['Hinterlegter SiBe'] = df[cand]
+                if cand in part_df.columns:
+                    part_df['Hinterlegter SiBe'] = part_df[cand]
                     break
-        if 'Hinterlegter SiBe' not in df.columns:
-            continue
+        if 'Hinterlegter SiBe' not in part_df.columns:
+            part_df['Hinterlegter SiBe'] = 0.0
 
-        pred_cols = [c for c in df.columns if isinstance(c, str) and c.startswith('pred_')]
+        pred_cols = [c for c in part_df.columns if isinstance(c, str) and c.startswith('pred_')]
         if not pred_cols:
             continue
-        if 'pred_L_WBZ_BlockMinAbs' in pred_cols:
-            pred_col = 'pred_L_WBZ_BlockMinAbs'
-        else:
-            pred_col = pred_cols[0]
+        selected_pred = 'pred_L_WBZ_BlockMinAbs' if 'pred_L_WBZ_BlockMinAbs' in pred_cols else pred_cols[0]
         if pred_name is None:
-            pred_name = pred_col
+            pred_name = selected_pred
 
-        price_col = 'Price_Material_var'
-        if price_col not in df.columns:
-            df[price_col] = 0.0
+        if 'Price_Material_var' not in part_df.columns:
+            part_df['Price_Material_var'] = 0.0
 
-        base_cols = ['Datum', 'Hinterlegter SiBe', pred_col, price_col]
-        if 'Teil' in df.columns:
-            base_cols.insert(0, 'Teil')
-        df = df[base_cols].copy()
-        if 'Teil' not in df.columns:
-            df['Teil'] = sub.name
-        df['Teil'] = df['Teil'].astype(str).replace({"": sub.name}).fillna(sub.name)
+        if 'Teil' not in part_df.columns:
+            part_df['Teil'] = part
+        part_df['Teil'] = part_df['Teil'].astype(str).replace({"": part}).fillna(part)
 
-        df['Hinterlegter SiBe'] = pd.to_numeric(df['Hinterlegter SiBe'], errors='coerce').fillna(0.0)
-        df[pred_col] = pd.to_numeric(df[pred_col], errors='coerce').fillna(0.0)
-        df[price_col] = pd.to_numeric(df[price_col], errors='coerce').fillna(0.0)
+        part_df['Hinterlegter SiBe'] = pd.to_numeric(part_df['Hinterlegter SiBe'], errors='coerce').fillna(0.0)
+        part_df[selected_pred] = pd.to_numeric(part_df[selected_pred], errors='coerce').fillna(0.0)
+        part_df['Price_Material_var'] = pd.to_numeric(part_df['Price_Material_var'], errors='coerce').fillna(0.0)
 
-        part_min = df['Datum'].min()
-        part_max = df['Datum'].max()
+        part_df = part_df.sort_values('Datum')
+        part_min = part_df['Datum'].min()
+        part_max = part_df['Datum'].max()
         global_min = part_min if global_min is None else min(global_min, part_min)
         global_max = part_max if global_max is None else max(global_max, part_max)
 
-        df = df.sort_values('Datum')
-        raw = df[['Teil', 'Datum', 'Hinterlegter SiBe', pred_col, price_col]].copy()
-        raw.rename(columns={pred_col: pred_name or pred_col}, inplace=True)
-        raw['Kapitalbindung_Hinterlegter'] = raw['Hinterlegter SiBe'] * raw[price_col]
-        raw['Kapitalbindung_Vorgeschlagen'] = raw[pred_name or pred_col] * raw[price_col]
-        if pred_name is None:
-            pred_name = pred_col
-        raw_frames.append(raw[['Teil', 'Datum', 'Hinterlegter SiBe', pred_name,
-                               price_col, 'Kapitalbindung_Hinterlegter',
-                               'Kapitalbindung_Vorgeschlagen']])
+        subset = part_df[['Teil', 'Datum', 'Hinterlegter SiBe', selected_pred, 'Price_Material_var']].copy()
+        if pred_name and selected_pred != pred_name:
+            subset.rename(columns={selected_pred: pred_name}, inplace=True)
+        elif pred_name is None:
+            pred_name = selected_pred
+
+        subset['Kapitalbindung_Hinterlegter'] = subset['Hinterlegter SiBe'] * subset['Price_Material_var']
+        subset['Kapitalbindung_Vorgeschlagen'] = subset[pred_name] * subset['Price_Material_var']
+        raw_frames.append(
+            subset[['Teil', 'Datum', 'Hinterlegter SiBe', pred_name,
+                    'Price_Material_var', 'Kapitalbindung_Hinterlegter',
+                    'Kapitalbindung_Vorgeschlagen']]
+        )
 
     if not raw_frames or pred_name is None or global_min is None or global_max is None:
+        print("Keine geeigneten Daten für die Aggregation gefunden.")
         return
 
     full_index = pd.date_range(global_min, global_max, freq='D')
@@ -536,6 +603,7 @@ def aggregate_all_parts(parts_root: str, out_dir: str) -> None:
                 lines.append(f"{rank}) Teil {row.Teil}: {val:,.0f} ({pct:.1f}%)")
             hover_texts.append("<br>".join(lines))
         return hover_texts
+
     forward_frames: list[pd.DataFrame] = []
     for raw in raw_frames:
         part_id = raw['Teil'].iloc[0] if not raw.empty else ''
@@ -551,9 +619,11 @@ def aggregate_all_parts(parts_root: str, out_dir: str) -> None:
         df_fwd = df_fwd.rename_axis('Datum').reset_index()
         df_fwd['Kapitalbindung_Hinterlegter'] = df_fwd['Hinterlegter SiBe'] * df_fwd['Price_Material_var']
         df_fwd['Kapitalbindung_Vorgeschlagen'] = df_fwd[pred_name] * df_fwd['Price_Material_var']
-        forward_frames.append(df_fwd[['Teil', 'Datum', 'Hinterlegter SiBe', pred_name,
-                                      'Price_Material_var', 'Kapitalbindung_Hinterlegter',
-                                      'Kapitalbindung_Vorgeschlagen']])
+        forward_frames.append(
+            df_fwd[['Teil', 'Datum', 'Hinterlegter SiBe', pred_name,
+                    'Price_Material_var', 'Kapitalbindung_Hinterlegter',
+                    'Kapitalbindung_Vorgeschlagen']]
+        )
 
     long_df_forward = pd.concat(forward_frames, ignore_index=True)
 
