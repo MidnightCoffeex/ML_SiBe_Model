@@ -74,10 +74,10 @@ def _evaluate_range(
     name_eod = "Gesamtbestand ohne SiBe"
     name_actual_sibe = "Aktueller hinterlegter SiBe"
     name_combined = "Gesamtbestand ohne SiBe + Vorgeschlagener SiBe"
-    name_peak = "Spitzenlinie Vorschlag"
-    name_peak_combined = "Spitzenlinie + Gesamtbestand ohne SiBe"
+    name_peak = "Quartal - Spitzenwert"
+    name_peak_combined = "Quartal - Spitzenwert + Gesamtbestand ohne SiBe"
     part_txt = str(results.get("Teil").iloc[0]) if "Teil" in results.columns and not results.empty else ""
-    # WBZ-Days (robust gegenÃ¼ber NiU-Prefix)
+    # WBZ-Days (robust gegenueber NiU-Prefix)
     wbz_col = _resolve_col(results, "WBZ_Days")
     wbz_val = results.get(wbz_col).iloc[0] if wbz_col and not results.empty else None
     wbz_txt = f" | WBZ: {int(wbz_val)} Tage" if isinstance(wbz_val, (int, float)) and pd.notna(wbz_val) else ""
@@ -128,11 +128,27 @@ def _evaluate_range(
 
     # Prepare an upper-envelope (peak) curve of the clamped predictions
     pred_col = f"pred_{target}"
-    results["pred_peak_curve"] = (
-        results[pred_col]
-        .rolling(window=14, min_periods=1)
-        .max()
-    )
+    dates_series = pd.to_datetime(results["Datum"], errors="coerce")
+    if not dates_series.empty:
+        start_date = dates_series.min().normalize()
+        boundaries = [start_date]
+        current = start_date
+        while current <= dates_series.max():
+            current = current + pd.DateOffset(months=3)
+            boundaries.append(current)
+        boundaries = sorted(set(boundaries))
+        block_idx = pd.cut(
+            dates_series,
+            bins=boundaries,
+            right=False,
+            labels=False,
+            include_lowest=True,
+        )
+        results["_quarter_block"] = block_idx.astype("Int64")
+        results["pred_peak_curve"] = results.groupby("_quarter_block")[pred_col].transform("max")
+        results.drop(columns=["_quarter_block"], inplace=True)
+    else:
+        results["pred_peak_curve"] = results[pred_col]
 
     fig2 = make_subplots(
         rows=5,
@@ -140,7 +156,7 @@ def _evaluate_range(
         shared_xaxes=True,
         vertical_spacing=0.1,
         subplot_titles=(
-            "Vorschlag Ã¼ber die Zeit",
+            "Vorschlag ueber die Zeit",
             name_eod,
             name_combined,
             name_peak,
@@ -184,7 +200,7 @@ def _evaluate_range(
         row=1,
         col=1,
     )
-    # EoD ohne SiBe (robust gegenÃ¼ber NiU-Prefix)
+    # EoD ohne SiBe (robust gegenueber NiU-Prefix)
     eod_col = _resolve_col(results, "EoD_Bestand_noSiBe")
     if eod_col:
         fig2.add_trace(
@@ -257,7 +273,7 @@ def _evaluate_range(
     fig2.update_layout(
         hovermode="x unified",
         height=1800,
-        title_text=(f"{heading} â€“ Zeitverlauf" if heading else "Zeitverlauf"),
+        title_text=(f"{heading} - Zeitverlauf" if heading else "Zeitverlauf"),
     )
     fig2.update_yaxes(title_text=name_pred, row=1, col=1)
     fig2.update_yaxes(title_text=name_eod, row=2, col=1)
@@ -748,6 +764,5 @@ if __name__ == "__main__":
 
     target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
     run_evaluation(args.data, args.model, target_list, args.plots, args.raw, model_type=args.model_type)
-
 
 

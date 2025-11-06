@@ -31,17 +31,19 @@ Immer enthalten (für Übersicht/Modellbasis):
 - `F_NiU_EoD_Bestand` (nur Anzeige)
 - `F_NiU_Hinterlegter SiBe` (nur Anzeige)
 - `EoD_Bestand_noSiBe` (wichtige Basisgröße)
+- `Price_Material_var` (Stückpreis aus `*_TeileWert.csv`, pro Teil konstant – Grundlage für Preisfaktor und Kapitalbindung)
+- `WBZ_Days` (Lead Time in Tagen)
 
 Weitere Beispiele:
 - Nachfrage‑Kennzahlen: `DemandMean_*`, `DemandMax_*`, auch als Varianten `log1p`, `z_`, `robz`.
-- Flags: `Flag_StockOut`, Stammdaten wie `WBZ_Days`.
+- Flags: `Flag_StockOut`, Hilfsgrößen wie zusätzliche Lags.
 
 Lag‑Features (neu):
 - „Punkt‑Lag“: z. B. `Lag_EoD_Bestand_noSiBe_7Tage` = Wert von genau vor 7 Tagen.
 - „Mittel‑Lag“: z. B. `Lag_EoD_Bestand_noSiBe_mean_28Tage` = Durchschnitt der letzten 28 Tage (ohne heute).
 
 Label (Ziel) für das Training:
-- `L_HalfYear_Target`: Stabile, halbjährliche Empfehlung, abgeleitet aus dem diagnostischen `L_NiU_WBZ_BlockMinAbs`.
+- `L_HalfYear_Target`: Stabile, halbjährliche Empfehlung, abgeleitet aus dem diagnostischen `L_NiU_WBZ_BlockMinAbs` und mit einem logarithmischen Preisfaktor verfeinert (teure Teile werden etwas konservativer empfohlen als günstige, maximaler Abzug 0,10).
 
 Hinweis zu Abhängigkeiten: Wenn eine abgeleitete Kennzahl (z. B. `..._log1p`) gewählt wird, werden dafür nötige Basiswerte intern berechnet – sie erscheinen aber nur in der Ausgabe, wenn sie ebenfalls angehakt wurden.
 
@@ -50,12 +52,12 @@ Hinweis zu Abhängigkeiten: Wenn eine abgeleitete Kennzahl (z. B. `..._log1p`)
 ## Selektiver Feature‑Build (GUI)
 
 Mit `python scripts/build_features_gui.py` öffnet sich eine einfache Oberfläche:
-- Häkchen setzen, welche Features/Labels erstellt werden sollen.
-- Abhängigkeiten werden automatisch berücksichtigt.
-- Die drei Basis‑Spalten (siehe oben) sind immer dabei.
-- Ausgabe pro Teil: `Features/<Teil>/features.parquet` und `features.xlsx`.
+- Häkchen setzen, welche Features/Labels erstellt werden sollen (inkl. separatem Bereich für Lag-Features).
+- Abhängigkeiten werden automatisch berücksichtigt; reine Zwischenwerte erscheinen nur, wenn sie ebenfalls ausgewählt werden.
+- Die „Fixe Basis“ (immer aktiv) umfasst `F_NiU_EoD_Bestand`, `F_NiU_Hinterlegter SiBe`, `EoD_Bestand_noSiBe`, `WBZ_Days` und `Price_Material_var`.
+- Ausgabe pro Teil: `Features/<Teil>/features.parquet` und `features.xlsx` plus `build_selection.json` mit der getroffenen Auswahl.
 
-Praktischer Effekt: Weniger Rechenzeit, weil nur wirklich benötigte Spalten gebaut werden.
+Praktischer Effekt: Weniger Rechenzeit, weil nur wirklich benötigte Spalten gebaut werden, und gleichzeitig sind Auswahlstände dokumentiert.
 
 ---
 
@@ -63,11 +65,14 @@ Praktischer Effekt: Weniger Rechenzeit, weil nur wirklich benötigte Spalten geb
 
 Training (`python scripts/train.py`):
 - Wähle Feature‑Ordner, Teil oder `ALL`, Modelltyp (`gb`, optional `xgb`, `lgbm`).
+- Als Ziel wird standardmäßig `L_WBZ_BlockMinAbs` vorgeschlagen; `L_HalfYear_Target` kann optional gewählt werden, wenn die preisfaktorisierte Variante benötigt wird.
 - Stelle Hyperparameter ein. Auf Wunsch zeigt ein Progress‑Balken den Trainingsfortschritt (parallel, stört das Training nicht).
 - Ergebnisse werden in `Modelle/...` gespeichert (inkl. Metriken und Feature‑Wichtigkeit).
 
 Auswertung (`python scripts/evaluate.py`):
 - Berechnet MAE, RMSE, R², MAPE und erzeugt CSV/Excel sowie Plots (PNG/HTML) in `plots/...`.
+- Für ALL-Modelle entsteht zusätzlich `Alle_Teile/` mit zwei HTMLs (Forward-Fill & ohne Forward-Fill) sowie Hilfstabellen (`Alle_Teile_Tageswerte*.xlsx`).
+- Die Kapitalbindungs-Grafen zeigen beim Mouseover die Top-3-Teile des jeweiligen Tages mit Wert und Prozentanteil – Ausreißer werden sofort sichtbar.
 - Anzeige‑Spalten wie „Hinterlegter SiBe“ werden robust erkannt (Unterstrich/Leerzeichen egal).
 
 ---

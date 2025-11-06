@@ -50,6 +50,19 @@ Dieser Verlauf fasst die wichtigsten Schritte von der ursprünglichen Pipeline b
 - Optionaler paralleler Progress‑Balken für `gb` (sklearn) via `--progress` oder interaktiven Prompt.
 - Interaktive Prompts für Hyperparameter, CV‑Splits und Gewichtungen überarbeitet.
 
+## 2025‑10‑29 (Preisfaktor, Kapitalbindung & Alle-Teile-Reports)
+
+### Pipeline & Label
+- `Price_Material_var` als fixer Basiswert: Stückpreis aus `*_TeileWert.csv`, für jedes Teil konstant über alle Tage verfügbar.
+- Export-Schnitt über Dateinamen (`YYYYMMDD`) – Trainingsdaten bis inkl. Exportdatum, Testdaten ab Folgetag; fehlende Tage werden bei Bedarf vorwärts aufgefüllt.
+- Logarithmischer Preisfaktor (maximal -0,10) reduziert Vorschläge für sehr teure Teile, ohne günstige Teile zu beschneiden.
+
+### Evaluierung
+- Aggregierte HTML-Berichte unter `Alle_Teile/`: Forward-Fill (`Alle_Teile.html`) und Originalwerte (`Alle_Teile_no_forward.html`).
+- Hilfstabellen `Alle_Teile_Tageswerte.xlsx` und `Alle_Teile_Tageswerte_no_forward.xlsx` bündeln Tageswerte incl. Kapitalbindung.
+- Mouseover der Kapitalbindungs-Grafen listet Top-3-Teile je Tag (Wert + Prozentanteil) – Ausreißer wie Teil 5500156/5500155 sind sofort sichtbar.
+- Kapitalbindung basiert auf `SiBe * Price_Material_var` für hinterlegte sowie vorgeschlagene Werte.
+
 ## Offene To‑Dos / Ideen
 - Progress‑Callbacks für `xgb`/`lgbm` analog zu `gb` integrieren.
 - Erweiterte Feature‑Registry (z. B. EWM/Quantile‑Fenster) in der GUI auswählbar machen.
