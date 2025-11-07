@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Simple GUI wrapper for training parameters.
-
-Collects inputs via Tkinter and invokes scripts/train.py with the chosen args.
-"""
+# Diese Tkinter-Oberfläche sammelt Trainingsparameter per Klick statt über die Konsole.
+# Sie startet anschließend das Trainingsskript mit den ausgewählten Einstellungen.
+# Tkinter-Oberfläche, die Trainingsparameter abfragt und das CLI-Skript startet.
 from __future__ import annotations
 
 import subprocess
@@ -15,13 +14,15 @@ from tkinter import filedialog, messagebox
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# Hauptfenster für das Training: hier werden alle Parameter gepflegt.
 class App(tk.Tk):
+    # Initialisiert das Fenster und legt alle Eingabefelder für das Training an.
     def __init__(self) -> None:
-        super().__init__()
+        self.title("Train Models – GUI")
         self.title("Train Models – GUI")
         self.geometry("820x680")
 
-        # Variables
+        # Variablen
         self.v_features = tk.StringVar(value=str(ROOT / "Features"))
         self.v_part = tk.StringVar(value="ALL")
         self.v_model_dir = tk.StringVar(value=str(ROOT / "Modelle"))
@@ -41,11 +42,13 @@ class App(tk.Tk):
         frm = tk.Frame(self)
         frm.pack(fill=tk.X, padx=10, pady=10)
 
+        # Hilfsfunktion, um eine beschriftete Eingabezeile samt optionalem Dateidialog zu erzeugen.
         def add_row(label: str, var: tk.StringVar, browse: bool = False, is_dir: bool = True):
             nonlocal row
             tk.Label(frm, text=label).grid(row=row, column=0, sticky="w", pady=3)
             tk.Entry(frm, textvariable=var, width=70).grid(row=row, column=1, sticky="we", padx=6)
             if browse:
+                # Öffnet je nach Bedarf einen Datei- oder Ordner-Dialog und überträgt die Auswahl in das Eingabefeld.
                 def pick():
                     sel = filedialog.askdirectory() if is_dir else filedialog.askopenfilename()
                     if sel:
@@ -65,7 +68,7 @@ class App(tk.Tk):
         add_row("subsample:", self.v_subsample)
         add_row("cv_splits:", self.v_cv)
 
-        # Timeseries scope + weighting
+        # Zeitreihen-Scope und Gewichtung
         scf = tk.Frame(self)
         scf.pack(fill=tk.X, padx=10)
         tk.Label(scf, text="Timeseries-Scope:").grid(row=0, column=0, sticky="w")
@@ -75,22 +78,24 @@ class App(tk.Tk):
         tk.Entry(scf, textvariable=self.v_weight_scheme, width=18).grid(row=1, column=1, sticky="w", pady=(6,0))
         tk.Entry(scf, textvariable=self.v_weight_factor, width=10).grid(row=1, column=2, sticky="w", pady=(6,0))
 
-        # Actions
+        # Aktionen
         act = tk.Frame(self)
         act.pack(fill=tk.X, padx=10, pady=6)
         tk.Button(act, text="Start", command=self.run).pack(side=tk.RIGHT)
 
-        # Log
+        # Protokoll
         self.txt = tk.Text(self, height=18)
         self.txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.txt.configure(state=tk.DISABLED)
 
+    # Zeigt Protokolleinträge im Fenster an, damit der Benutzer Rückmeldungen erhält.
     def log(self, s: str) -> None:
         self.txt.configure(state=tk.NORMAL)
         self.txt.insert(tk.END, s)
         self.txt.see(tk.END)
         self.txt.configure(state=tk.DISABLED)
 
+    # Übersetzt die Eingaben in einen Aufruf des Trainingsskripts und startet ihn.
     def run(self) -> None:
         try:
             cmd = [
@@ -118,6 +123,7 @@ class App(tk.Tk):
             messagebox.showerror("Fehler", f"Konnte Training nicht starten: {exc}")
 
 
+# Startet die grafische Oberfläche, wenn das Skript direkt ausgeführt wird.
 def main() -> None:
     App().mainloop()
 

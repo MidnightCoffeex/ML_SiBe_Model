@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""Simple GUI to run evaluation with form inputs.
-
-Opens a window to select features, model, targets, and output folder, then
-invokes scripts/evaluate.py with those arguments.
-"""
+# Diese Oberfläche ermöglicht es, Modelle ohne Kommandozeile zu evaluieren.
+# Sie nimmt Pfadangaben entgegen und startet anschließend das Auswertungsskript.
+# Einfache Tkinter-Oberfläche, um Modelle ohne Kommandozeile zu evaluieren.
 from __future__ import annotations
 
 import subprocess
@@ -16,9 +14,11 @@ from tkinter import filedialog, messagebox
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# Hauptfenster für die Auswertung: sammelt Eingaben und startet den Prozess.
 class App(tk.Tk):
+    # Richtet alle Eingabefelder ein und hinterlegt Standardwerte.
     def __init__(self) -> None:
-        super().__init__()
+        self.title("Evaluate Models – GUI")
         self.title("Evaluate Models – GUI")
         self.geometry("820x520")
 
@@ -34,11 +34,13 @@ class App(tk.Tk):
         frm = tk.Frame(self)
         frm.pack(fill=tk.X, padx=10, pady=10)
 
+        # Hilfsfunktion, um beschriftete Eingabereihen samt optionalem Dateidialog zu erzeugen.
         def add_row(label: str, var: tk.StringVar, browse: bool = False, is_dir: bool = True):
             r = add_row.row
             tk.Label(frm, text=label).grid(row=r, column=0, sticky="w", pady=3)
             tk.Entry(frm, textvariable=var, width=70).grid(row=r, column=1, sticky="we", padx=6)
             if browse:
+                # Öffnet je nach Einstellung einen Datei- oder Ordner-Dialog und übernimmt die Auswahl.
                 def pick():
                     sel = filedialog.askdirectory() if is_dir else filedialog.askopenfilename()
                     if sel:
@@ -64,12 +66,14 @@ class App(tk.Tk):
         self.txt.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.txt.configure(state=tk.DISABLED)
 
+    # Schreibt Text in das Ausgabefeld, damit der Benutzer Rückmeldungen sieht.
     def log(self, s: str) -> None:
         self.txt.configure(state=tk.NORMAL)
         self.txt.insert(tk.END, s)
         self.txt.see(tk.END)
         self.txt.configure(state=tk.DISABLED)
 
+    # Stellt den Befehl zusammen und startet das Evaluierungsskript im Hintergrund.
     def run(self) -> None:
         try:
             cmd = [
@@ -89,6 +93,7 @@ class App(tk.Tk):
             messagebox.showerror("Fehler", f"Konnte Evaluation nicht starten: {exc}")
 
 
+# Startet die grafische Oberfläche, wenn das Skript direkt ausgeführt wird.
 def main() -> None:
     App().mainloop()
 

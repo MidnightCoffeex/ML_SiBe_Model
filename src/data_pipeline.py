@@ -1,4 +1,7 @@
-﻿import os
+# Dieses Modul verwandelt die exportierten Rohdaten in saubere, lückenlose Tagesreihen je Teil.
+# Es behandelt Sonderfälle wie Kommazahlen, unterschiedliche Spaltennamen und splittet Trainings- und Testdaten.
+# Zusätzlich stellt es Helfer bereit, mit denen andere Komponenten gezielt Features und Labels auswählen können.
+
 import re
 from pathlib import Path
 from typing import Dict, List
@@ -7,15 +10,13 @@ import pandas as pd
 import numpy as np
 
 
-DECIMAL_REGEX = re.compile(r"^-?\d{1,3}(\.\d{3})*,\d+$")
-
-
 ###############################
-# Helpers
+# Hilfsfunktionen
 ###############################
 
+# Wandelt Textwerte mit deutschem Kommaformat in echte Zahlen, damit Berechnungen möglich sind.
 def _convert_comma_decimal(series: pd.Series) -> pd.Series:
-    """Convert comma decimals like ``1.234,5`` to floats."""
+    # Wandelt Kommazahlen im Format "1.234,5" in echte Fließkommazahlen, damit pandas korrekt rechnen kann.
     if series.dtype != object:
         return series
     if not series.str.contains(',', na=False).any():
@@ -27,8 +28,9 @@ def _convert_comma_decimal(series: pd.Series) -> pd.Series:
         return series
 
 
+# Liest die Excel-Zuordnung, um je Datensatz die relevanten Spalten zu kennen.
 def _load_column_map(xlsx_path: str) -> Dict[str, List[str]]:
-    """Return mapping of dataset name to required columns."""
+    # Liest die Excel-Mapping-Datei und liefert für jeden Datensatz die benötigten Spalten als Liste zurück.
     xl = pd.read_excel(xlsx_path)
     col_map: Dict[str, List[str]] = {}
     for _, row in xl.iterrows():
@@ -40,13 +42,12 @@ def _load_column_map(xlsx_path: str) -> Dict[str, List[str]]:
     return col_map
 
 
+# Öffnet eine CSV-Datei, säubert Spaltennamen, filtert Lagerort 120 und wandelt Werte in brauchbare Typen um.
 def load_csv_file(path: Path, part: str | None = None) -> pd.DataFrame:
-    """Load a single CSV file and apply basic cleaning.
-
-    Some exports use a comma instead of a semicolon as delimiter. ``pandas`` can
-    automatically detect the separator when ``sep=None`` and ``engine='python'``
-    is used.  This ensures all files are parsed correctly.
-    """
+    # Lädt eine einzelne CSV-Datei und führt grundlegende Bereinigungen durch.
+    # Einige Exporte verwenden Komma statt Semikolon als Trennzeichen.
+    # Mit ``sep=None`` und ``engine='python'`` erkennt pandas das automatisch,
+    # damit alle Dateien unabhängig vom Format verarbeitet werden können.
     df = pd.read_csv(path, encoding='ISO-8859-1', sep=None, engine='python', dtype=str)
     df.columns = df.columns.str.strip()
     if 'Teil' not in df.columns and 'Teil ' in df.columns:
@@ -62,11 +63,12 @@ def load_csv_file(path: Path, part: str | None = None) -> pd.DataFrame:
 
 
 ###############################
-# Loading raw tables
+# Laden der Roh-Tabellen
 ###############################
 
+# Sucht im Rohdaten-Ordner nach allen Exporten, gruppiert sie nach Datensatz und ergänzt Metadaten.
 def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[str, pd.DataFrame]:
-    """Load all CSV files below ``directory`` and return them grouped by dataset."""
+    # Liest alle CSV-Dateien im Verzeichnis ein und gruppiert sie nach Datensatztyp.
     pattern = re.compile(r"(\d{8})_M100_(.*)\.csv$", re.IGNORECASE)
     grouped: Dict[str, List[pd.DataFrame]] = {}
     for csv in sorted(Path(directory).glob('*.csv')):
@@ -82,8 +84,8 @@ def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[st
         else:
             dataset = rest
         dataset = dataset.split('.csv')[0]
-        # Normalize dataset names; preserve TeileWert explicitly for price ingestion
-        # Handle common variants like 'M100_TeileWert', 'TeileWert', etc.
+        # Normalisiert die Datensatznamen und behält TeileWert ausdrücklich für die Preisberechnung.
+        # Behandelt gängige Varianten wie 'M100_TeileWert' oder 'TeileWert'.
         if 'TeileWert' in dataset:
             dataset = 'TeileWert'
         elif dataset.startswith('Teile'):
@@ -96,18 +98,18 @@ def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[st
         if dataset not in column_map and dataset != 'TeileWert':
             continue  # ignore unrelated exports (allow TeileWert)
         df = load_csv_file(csv, part)
-        # For SiBeVerlauf we now allow new unified export schema
+        # Für SiBeVerlauf ist auch das neue vereinheitlichte Export-Schema zulässig.
         if dataset == 'SiBeVerlauf':
-            # Prefer explicit selection to ensure required columns survive
-            sibe_candidates = ['Teil', 'AudEreignis-ZeitPkt', 'Datum Ã„nderung', 'Im Sytem hinterlgeter SiBe', 'aktiver SiBe']
-            # Be robust to encoding variations like 'Datum ï¿½nderung'
+            # Wählt die benötigten Spalten explizit aus, damit sie sicher erhalten bleiben.
+            sibe_candidates = ['Teil', 'AudEreignis-ZeitPkt', 'Datum Änderung', 'Im Sytem hinterlgeter SiBe', 'aktiver SiBe']
+            # Geht robust mit Encodierungsvarianten wie 'Datum Änderung' um.
             colmap = {c: c for c in df.columns}
-            # find a column that looks like 'Datum Ã„nderung'
+            # Sucht nach Spalten, die wie 'Datum Änderung' aussehen.
             for c in df.columns:
                 cs = str(c)
                 lcs = cs.lower()
-                if 'datum' in lcs and 'nderung' in lcs and 'Ã¤nder' in lcs or 'nd' in lcs:
-                    colmap['Datum Ã„nderung'] = c
+                if 'datum' in lcs and 'nderung' in lcs and 'änder' in lcs or 'nd' in lcs:
+                    colmap['Datum Änderung'] = c
                 if 'aktiver' in lcs and 'sibe' in lcs and 'im sytem' not in lcs:
                     colmap['aktiver SiBe'] = c
             keep_cols = []
@@ -115,7 +117,7 @@ def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[st
                 src = colmap.get(k)
                 if src in df.columns and src not in keep_cols:
                     keep_cols.append(src)
-            # If an 'alter sibe' like column exists but was not mapped, include it
+            # Falls eine Spalte wie 'Alter_SiBe' existiert, aber nicht gemappt wurde, ergänzen wir sie hier.
             for c in df.columns:
                 lcs = str(c).lower()
                 if 'alter' in lcs and 'sibe' in lcs and c not in keep_cols:
@@ -139,16 +141,14 @@ def load_all_tables(directory: str, column_map: Dict[str, List[str]]) -> Dict[st
 
 
 ###############################
-# Feature engineering per part
+# Feature-Aufbereitung je Teil
 ###############################
 
+# Prüft mehrere Datumsspalten, um für jede Zeile ein einheitliches Tagesdatum zu bestimmen.
 def _parse_date(df: pd.DataFrame, columns: List[str]) -> pd.Series:
-    """Parse multiple possible date columns with fallback.
-
-    Columns are checked in order and missing values are filled by the next
-    available column.  Parsing is done with ``dayfirst`` and ``format='mixed'`` to
-    handle heterogeneous date formats robustly.
-    """
+    # Parst mehrere mögliche Datumsspalten mit Rückfalllogik.
+    # Die Spalten werden der Reihe nach geprüft, fehlende Werte durch die nächste
+    # verfügbare Spalte ersetzt und mit ``dayfirst``/``format='mixed'`` robust geparst.
     date = pd.Series(pd.NaT, index=df.index)
     for c in columns:
         if c in df.columns:
@@ -158,6 +158,7 @@ def _parse_date(df: pd.DataFrame, columns: List[str]) -> pd.Series:
     return date
 
 
+# Aggregiert einen Rohdatensatz auf Tagesebene und entscheidet, welche Werte summiert, zuletzt oder zuerst übernommen werden.
 def _aggregate_dataset(
     df: pd.DataFrame, date_columns: List[str], last_cols: List[str] | None = None
 ) -> pd.DataFrame:
@@ -181,8 +182,9 @@ def _aggregate_dataset(
     return grouped
 
 
+# Ermittelt aus Lagerbuchungen den täglichen Endbestand, indem immer der letzte Wert pro Tag gewählt wird.
 def _prepare_lagerbew(df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate ``Lagerbew`` to daily end-of-day stock per part."""
+    # Aggregiert den Datensatz ``Lagerbew`` auf tägliche Endbestände je Teil.
     df = df.copy()
     full_dt = _parse_date(df, ['BuchDat'])
     df['Datum'] = full_dt.dt.floor('D')
@@ -193,8 +195,9 @@ def _prepare_lagerbew(df: pd.DataFrame) -> pd.DataFrame:
     return df.groupby(['Teil', 'Datum'], as_index=False)['Lagerbestand'].last()
 
 
+# Rechnet die Dispositionsdaten auf Tagesebene zusammen und liefert Nettobedarf sowie Bedarfsmenge.
 def _prepare_dispo(df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate ``Dispo`` to daily net requirements per part."""
+    # Aggregiert ``Dispo`` auf den täglichen Nettobedarf je Teil.
     df = df.copy()
     df['Datum'] = _parse_date(df, ['Termin', 'Solltermin'])
     df = df.dropna(subset=['Datum'])
@@ -208,16 +211,12 @@ def _prepare_dispo(df: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
+# Ältere Voll-Build-Routine, die aus historischen Gründen erhalten blieb und komplette Teiltabellen erzeugt.
 def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx') -> Dict[str, Dict[str, pd.DataFrame | pd.Timestamp | None]]:
-    """Process all raw files and return a dict of
-    part -> { 'df': feature DataFrame, 'first_dispo_date': Timestamp | None }.
-
-    The first_dispo_date per part is used downstream to split into
-    historical (pre-Dispo) and Dispo-period subsets.
-    """
+    # Historischer Voll-Build: erstellt für jedes Teil eine Tabelle samt Dispo-Startdatum.
     column_map = _load_column_map(xlsx_path)
     tables = load_all_tables(raw_dir, column_map)
-    # Preis-Map (ohne Datum) aus TeileWert: exakte Spalte 'DPr Material var'
+    # Preis-Zuordnung (ohne Datum) aus TeileWert: exakte Spalte 'DPr Material var'
     price_map_tw: dict[str, float] = {}
     try:
         if 'TeileWert' in tables:
@@ -229,14 +228,14 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                         price_map_tw[str(_tw.loc[i, 'Teil'])] = float(v)
     except Exception:
         price_map_tw = {}
-    # Build a per-Teil price map from TeileWert using exact column 'DPr Material var'
-    # No date usage: take the last non-null value encountered per part across all rows/files
+    # Erstellt pro Teil aus TeileWert eine Preiszuordnung anhand der Spalte 'DPr Material var'.
+    # Ohne Datumsbezug: je Teil den letzten vorhandenen Wert über alle Zeilen und Dateien übernehmen.
     price_map: dict[str, float] = {}
     try:
         if 'TeileWert' in tables:
             tw_all = tables['TeileWert'].copy()
             if 'DPr Material var' in tw_all.columns and 'Teil' in tw_all.columns:
-                # Ensure numeric conversion (commas already handled in loader, but be safe)
+                # Stellt sicher, dass die Werte numerisch sind (Kommas wurden bereits beim Einlesen behandelt).
                 tw_all['DPr Material var'] = pd.to_numeric(tw_all['DPr Material var'], errors='coerce')
                 for _, r in tw_all[['Teil', 'DPr Material var']].iterrows():
                     val = r['DPr Material var']
@@ -246,7 +245,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         price_map = {}
 
     processed: Dict[str, pd.DataFrame] = {}
-    # Aggregate relevant datasets
+    # Fasst die relevanten Rohdatensätze zusammen.
     agg_tables: Dict[str, pd.DataFrame] = {}
     for name, df in tables.items():
         if name == 'Lagerbew':
@@ -255,8 +254,8 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             agg_tables[name] = _prepare_dispo(df)
         elif name == 'SiBeVerlauf':
             df_s = df.copy()
-            # Unify new schema to legacy names so downstream stays stable
-            # tolerate columns like 'Datum ï¿½nderung'
+            # Vereinheitlicht neue Schemas auf die alten Spaltennamen, damit nachgelagerte Schritte stabil bleiben.
+            # tolerate columns like 'Datum ïÂ¿Â½nderung'
             dchange = None
             for c in df_s.columns:
                 lcs = str(c).lower()
@@ -267,16 +266,16 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 df_s.rename(columns={dchange: 'AudEreignis-ZeitPkt'}, inplace=True)
             if 'aktiver SiBe' in df_s.columns and 'Im Sytem hinterlgeter SiBe' not in df_s.columns:
                 df_s.rename(columns={'aktiver SiBe': 'Im Sytem hinterlgeter SiBe'}, inplace=True)
-            # Normalize any variant of 'alter SiBe' to a canonical 'Alter_SiBe'
+            # Vereinheitlicht jede Variante von 'alter SiBe' auf den Namen 'Alter_SiBe'.
             if 'Alter_SiBe' not in df_s.columns:
                 for c in list(df_s.columns):
                     lcs = str(c).lower()
                     if 'alter' in lcs and 'sibe' in lcs:
                         df_s.rename(columns={c: 'Alter_SiBe'}, inplace=True)
                         break
-            # ensure Teil exists; if not, try to derive from PrimÃ¤rschlÃ¼ssel text
-            if 'Teil' not in df_s.columns and 'PrimÃ¤rschlÃ¼ssel' in df_s.columns:
-                part = df_s['PrimÃ¤rschlÃ¼ssel'].astype(str).str.extract(r'Teil\s+(\d+)')[0]
+            # Stellt sicher, dass eine Teilnummer existiert; fehlt sie, leiten wir sie aus dem Primärschlüsseltext ab.
+            if 'Teil' not in df_s.columns and 'Primärschlüssel' in df_s.columns:
+                part = df_s['Primärschlüssel'].astype(str).str.extract(r'Teil\s+(\d+)')[0]
                 df_s['Teil'] = part
             agg_tables[name] = _aggregate_dataset(
                 df_s,
@@ -290,7 +289,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             agg_tables[name] = df.groupby(['Teil', 'Datum'], as_index=False).agg(agg)
         elif name == 'TeileWert':
             df_tw = df.copy()
-            # Versuche die Spalte fÃ¼r Materialpreis zu erkennen
+            # Versuche die Spalte für Materialpreis zu erkennen
             price_col = None
             for c in df_tw.columns:
                 lcs = str(c).lower()
@@ -318,7 +317,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         else:
             continue
 
-    # Determine all parts
+    # Ermittelt alle vorhandenen Teilnummern.
     parts: set[str] = set()
     for df in agg_tables.values():
         parts.update(df['Teil'].astype(str).unique())
@@ -332,7 +331,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         if not data:
             continue
 
-        # collect relevant dates from Lagerbewegung and Dispo
+        # Sammelt relevante Zeitpunkte aus Lagerbewegung und Dispo.
         date_set: set[pd.Timestamp] = set()
         first_dispo_date = None
         if 'Lagerbew' in data:
@@ -369,21 +368,21 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         if not date_set:
             continue
 
-        # Build a continuous daily timeline between earliest and latest relevant dates
+        # Baut eine durchgehende Tagesachse zwischen frühestem und spätestem relevanten Datum.
         if 'export_cut_date' in locals() and export_cut_date is not None:
             try:
                 date_set.add(pd.to_datetime(export_cut_date))
                 date_set.add(pd.to_datetime(export_cut_date) + pd.Timedelta(days=1))
             except Exception:
                 pass
-        # This ensures eventless days are represented for robust rolling windows and lags
+        # Dadurch werden auch ereignislose Tage berücksichtigt, damit Rollfenster und Lags stabil bleiben.
         min_date = pd.to_datetime(min(date_set))
         max_date = pd.to_datetime(max(date_set))
         full_days = pd.date_range(min_date, max_date, freq='D')
         feat = pd.DataFrame({'Datum': full_days})
         feat['Teil'] = part
 
-        # merge Lagerbewegung inventory
+        # Fügt die Lagerbewegungsbestände ein.
         if 'Lagerbew' in data:
             lb = data['Lagerbew'][['Datum', 'Lagerbestand']]
             feat = feat.merge(lb, on='Datum', how='left')
@@ -392,7 +391,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         if baseline_date is not None and feat.loc[feat['Datum'] == baseline_date, 'Lagerbestand'].isna().all():
             feat.loc[feat['Datum'] == baseline_date, 'Lagerbestand'] = baseline
 
-        # merge Dispo movements
+        # Ergänzt die Bewegungen aus der Disposition.
         if 'Dispo' in data:
             dispo = data['Dispo'][['Datum', 'net', 'Bedarfsmenge']]
             feat = feat.merge(dispo, on='Datum', how='left')
@@ -407,23 +406,23 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             feat['Bedarfsmenge'] = 0
             feat['cum_net'] = 0
 
-        # compute end-of-day stock on a daily grid
-        # - before first_dispo_date: carry forward last known Lagerbestand (no backfill to avoid leakage)
-        # - on/after first_dispo_date: baseline + cumulative net movements
+        # Berechnet den Tagesendbestand auf dem erzeugten Raster.
+        # - vor dem ersten Dispo-Termin: letzten bekannten Lagerbestand fortschreiben (kein Backfill, um Leaks zu vermeiden).
+        # - ab dem ersten Dispo-Termin: Basisbestand plus kumulierte Nettobewegungen.
         lb_num = pd.to_numeric(feat['Lagerbestand'], errors='coerce')
         if first_dispo_date is not None:
             pre_mask = feat['Datum'] < first_dispo_date
-            # forward-fill Lagerbestand over pre-Dispo window only
+            # Füllt den Lagerbestand nur im Zeitraum vor der Dispo vorwärts auf.
             feat.loc[pre_mask, 'EoD_Bestand'] = lb_num.loc[pre_mask].ffill()
             post_mask = feat['Datum'] >= first_dispo_date
             feat.loc[post_mask, 'EoD_Bestand'] = baseline + feat.loc[post_mask, 'cum_net']
         else:
-            # no Dispo present: forward-fill across entire range
+            # Ohne Dispo-Daten: über den gesamten Bereich vorwärts auffüllen.
             feat['EoD_Bestand'] = lb_num.ffill()
-        # final numeric coercion; keep unknowns as 0 to stay backward-compatible
+        # Abschließende Numerisierung; unbekannte Werte bleiben 0 für die Rückwärtskompatibilität.
         feat['EoD_Bestand'] = pd.to_numeric(feat['EoD_Bestand'], errors='coerce').fillna(0)
 
-        # safety stock history: apply latest change as of each feature date (backward asof),
+        # Sicherheitsbestandshistorie: wendet je Stichtag die zuletzt bekannte Änderung rückblickend an.
         # before the first change -> 0, after last change -> last value
         if 'SiBeVerlauf' in data:
             # include optional previous SiBe if provided (e.g. 'alter SiBE')
@@ -444,7 +443,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 merged['Im Sytem hinterlgeter SiBe'], errors='coerce'
             ).fillna(0)
             # Backfill: For all dates strictly before the first change, use the earliest Alter_SiBe.
-            # Der 'alte SiBe' gilt ab Serienstart bis zum ersten Ã„nderungsdatum; danach gilt der aktive SiBe.
+            # Der 'alte SiBe' gilt ab Serienstart bis zum ersten Änderungsdatum; danach gilt der aktive SiBe.
             if 'Alter_SiBe' in sibe.columns:
                 try:
                     first_change = sibe['Datum'].min()
@@ -470,21 +469,21 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         if _pconst is not None:
             feat['Price_Material_var'] = float(_pconst)
 
-        # rename display-only (no-feature) columns and compute training series
+        # Benennt reine Anzeige-Spalten um und berechnet die Trainingsreihen.
         feat.rename(columns={'EoD_Bestand': 'F_NiU_EoD_Bestand'}, inplace=True)
         feat.rename(columns={'Hinterlegter SiBe': 'F_NiU_Hinterlegter SiBe'}, inplace=True)
-        # FÃ¼r Auswertung/Plots zusÃ¤tzlich eine nicht-NiU-Kopie behalten
+        # Für Auswertung/Plots zusätzlich eine nicht-NiU-Kopie behalten
         if 'F_NiU_Hinterlegter SiBe' in feat.columns and 'Hinterlegter SiBe' not in feat.columns:
             feat['Hinterlegter SiBe'] = feat['F_NiU_Hinterlegter SiBe']
         feat['EoD_Bestand_noSiBe'] = feat['F_NiU_EoD_Bestand'] - feat['F_NiU_Hinterlegter SiBe']
-        # Neutral always-present columns for downstream usage
+        # Neutrale Pflichtspalten, die nachgelagerte Schritte immer erwarten.
         feat['EoD_Bestand'] = feat['F_NiU_EoD_Bestand']
         feat['Hinterlegter_SiBe'] = feat['F_NiU_Hinterlegter SiBe']
         feat['Flag_StockOut'] = (feat['EoD_Bestand_noSiBe'] <= 0).astype(int)
 
-        # (DaysToEmpty/BestandDelta_7T entfernt â€“ nicht mehr Teil der Ausgabe)
+        # (DaysToEmpty/BestandDelta_7T entfernt – nicht mehr Teil der Ausgabe)
 
-        # WBZ from Teilestamm
+        # WBZ aus dem Teilestamm.
         wbz = None
         if 'Teilestamm' in data:
             w = data['Teilestamm']['WBZ'].dropna()
@@ -495,10 +494,10 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         lead_time = int(wbz) if wbz and wbz > 0 else 1
         window = max(1, int(np.ceil(lead_time * 1.25)))
 
-        # Legacy label (kept as background only, renamed)
+        # Altes Label (nur noch als Referenz behalten und umbenannt).
         deficit = (-feat['EoD_Bestand_noSiBe']).clip(lower=0)
         deficit_arr = deficit.to_numpy()
-        # simple rolling sum over window as proxy (keine DaysToEmpty mehr)
+        # Einfache Rollsumme über das Fenster als Ersatz (DaysToEmpty entfällt).
         rolling = (
             pd.Series(deficit_arr[::-1])
             .rolling(window, min_periods=1)
@@ -507,7 +506,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         )
         feat['L_NiU_StockOut_MinAdd'] = rolling
 
-        # Neues Label: grÃ¶ÃŸter negativer Ausschlag innerhalb WBZ-Fenster (als positiver Wert)
+        # Neues Label: größter negativer Ausschlag innerhalb WBZ-Fenster (als positiver Wert)
         # LABLE_WBZ_BlockMinAbs = max(0, -min(EoD_Bestand_noSiBe im Fenster))
         feat = feat.sort_values('Datum').reset_index(drop=True)
         date_list = pd.to_datetime(feat['Datum']).tolist()
@@ -516,7 +515,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         for i in range(len(feat)):
             start = date_list[i]
             end = start + pd.Timedelta(days=int(lead_time))
-            # Fenstermaske Ã¼ber Index, da date_list eine Liste ist
+            # Fenstermaske über Index, da date_list eine Liste ist
             y_vals = []
             for k in range(i, len(feat)):
                 if date_list[k] < end:
@@ -530,8 +529,8 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         block_base = lbl_block.copy()
 
         # Halbjahres-Regel mit Faktoren: Fensterweise (ca. 6 Monate) denselben Wert setzen,
-        # und zwar den HÃ¶chstwert von L_NiU_WBZ_BlockMinAbs innerhalb des Fensters,
-        # moduliert durch marginale Faktoren (WBZ, Frequenz, VolatilitÃ¤t), jeweils gecappt.
+        # und zwar den Höchstwert von L_NiU_WBZ_BlockMinAbs innerhalb des Fensters,
+        # moduliert durch marginale Faktoren (WBZ, Frequenz, Volatilität), jeweils gecappt.
         lbl_halfyear_base = np.zeros(len(feat), dtype=float)
         lbl_halfyear = np.zeros(len(feat), dtype=float)
         f_wbz_arr = np.zeros(len(feat), dtype=float)
@@ -544,18 +543,23 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         i = 0
         while i < len(feat):
             start = date_list[i]
-            # 6 Monate nach vorn; nÃ¤chstes verfÃ¼gbares Datum >= diesem Ziel
+            # 6 Monate nach vorn; nächstes verfügbares Datum >= diesem Ziel
             target = start + pd.DateOffset(months=6)
             # finde j: erstes Index mit Datum >= target
             j = i
             while j + 1 < len(feat) and date_list[j + 1] < target:
                 j += 1
-            # falls nÃ¤chstes Datum hinter target existiert, auf dieses "aufrunden"
+            # falls nächstes Datum hinter target existiert, auf dieses "aufrunden"
             if j + 1 < len(feat) and date_list[j] < target <= date_list[j + 1]:
                 j = j + 1
             # Fenster [i..j]
             window_max = float(np.nanmax(lbl_block[i:j + 1])) if j >= i else float(lbl_block[i])
             # Faktoren berechnen (fensterweise konstant)
+            # Idee fuer Laien: Wir nehmen den Basiswert und pruefen vier Einflussfaktoren.
+            # * WBZ-Faktor: je laenger die Wiederbeschaffungszeit, desto konservativer soll der Vorschlag sein (+0 bis +20 %).
+            # * Frequenz-Faktor: treten in einem Fenster viele Bedarfsereignisse auf, erhoehen wir den Vorschlag, weil oft entnommen wird.
+            # * Volatilitaets-Faktor: schwankt die Nachfrage stark, geben wir einen Sicherheitszuschlag bis +20 %.
+            # * Preis-Faktor: sehr teure Teile sollen nicht ueberproportional viel Kapital binden, daher reduziert dieser Faktor bis zu 10 %.
             wbz_eff = float(pd.to_numeric(feat.loc[i, 'WBZ_Days'], errors='coerce')) if 'WBZ_Days' in feat.columns else 0.0
             if not np.isfinite(wbz_eff) or wbz_eff <= 0:
                 wbz_eff = 14.0
@@ -573,7 +577,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             est_events_wbz = events_window * (wbz_eff / window_days)
             f_freq = 0.20 * (np.log1p(est_events_wbz) / np.log1p(8.0))
             f_freq = float(min(0.20, max(0.0, f_freq)))
-            # VolatilitÃ¤t (CV) im Fenster
+            # Volatilität (CV) im Fenster
             dwin = demand_series[i:j + 1]
             mu = float(np.nanmean(dwin)) if dwin.size else 0.0
             sigma = float(np.nanstd(dwin)) if dwin.size else 0.0
@@ -593,10 +597,12 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 f_price = float(np.clip(f_price[i], -0.10, 0.0)) if i < len(f_price) else 0.0
             else:
                 f_price = 0.0
+            # Die Summe der Faktoren darf maximal +40 % ergeben; negative Effekte koennen nur vom Preis kommen.
             total_factor = min(0.40, max(0.0, f_wbz + f_freq + f_vol + f_price))
 
             base_val = window_max
             final_val = base_val * (1.0 + total_factor)
+            # Das Basislabel wird also mit dem aufsummierten Faktor multipliziert und fuer das gesamte Halbjahr verwendet.
             lbl_halfyear_base[i:j + 1] = base_val
             lbl_halfyear[i:j + 1] = final_val
             f_wbz_arr[i:j + 1] = f_wbz
@@ -614,7 +620,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         total_factor_arr = np.clip(f_wbz_arr + f_freq_arr + f_vol_arr + f_price_arr, 0.0, 0.40)
         feat['L_NiU_WBZ_BlockMinAbs'] = block_base * (1.0 + total_factor_arr)
 
-        # ----- rolling time features -----
+        # ----- Rollierende Zeitmerkmale -----
         demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
         demand_series = demand_series.clip(lower=0).fillna(0)
         for fac in [1.0, 2/3, 1/2, 1/4]:
@@ -623,15 +629,15 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             feat[f'DemandMean_{key}'] = demand_series.shift(1).rolling(w, min_periods=1).mean()
             feat[f'DemandMax_{key}'] = demand_series.shift(1).rolling(w, min_periods=1).max()
 
-        # ----- transformations: log1p and per-SKU (Teil) normalization for key quantities -----
-        # 1) EoD_Bestand_noSiBe transformations
+        # ----- Transformationen: log1p und teilbezogene Normalisierung wichtiger Kennzahlen -----
+        # 1) Transformationen für EoD_Bestand_noSiBe
         try:
-            # log1p on non-negative part; separate positive deficit magnitude as log1p too
+            # Wendet log1p auf den nichtnegativen Teil an und behandelt Defizite separat ebenfalls per log1p.
             eod = pd.to_numeric(feat['EoD_Bestand_noSiBe'], errors='coerce')
             feat['EoD_Bestand_noSiBe_log1p'] = np.log1p(eod.clip(lower=0))
             deficit_pos = (-eod).clip(lower=0)
             feat['DeficitPos_log1p'] = np.log1p(deficit_pos)
-            # per-SKU z-score and robust z-score
+            # Teilbezogener z-Score sowie robuster z-Score.
             if 'Teil' in feat.columns:
                 grp = feat.groupby('Teil')
                 mean = grp['EoD_Bestand_noSiBe'].transform('mean')
@@ -648,12 +654,12 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         except Exception:
             pass
 
-        # 2) DemandMean_* and DemandMax_* transformations per column
+        # 2) Transformationen für DemandMean_* und DemandMax_* je Spalte.
         demand_cols = [c for c in feat.columns if c.startswith('DemandMean_') or c.startswith('DemandMax_')]
         for c in demand_cols:
             try:
                 vals = pd.to_numeric(feat[c], errors='coerce').fillna(0)
-                # log1p
+                # log1p-Transformation
                 feat[f'{c}_log1p'] = np.log1p(vals.clip(lower=0))
                 if 'Teil' in feat.columns:
                     grp = feat.groupby('Teil')
@@ -698,7 +704,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             ]
         ]
 
-        # Drop Not-in-Use diagnostics before persisting, but KEEP essential NiU display columns
+        # Entfernt NiU-Diagnosen vor dem Speichern, behält aber die wichtigen Anzeige-Spalten.
         essential_niu = {"F_NiU_EoD_Bestand", "F_NiU_Hinterlegter SiBe"}
         keep_cols = []
         for c in feat.columns:
@@ -715,75 +721,23 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
     return processed
 
 
-def save_feature_folders_split(
-    features: Dict[str, Dict[str, pd.DataFrame | pd.Timestamp | None]],
-    features_dir: str = 'Features',
-    test_dir: str = 'Test_Set',
-) -> None:
-    """Write each part's features into two folders:
-    - ``features_dir/<part>``: only historical Lagerbewegung period (pre-Dispo)
-    - ``test_dir/<part>``: Dispo period (including and after first Dispo date)
-
-    Both Parquet and Excel are written for convenience.
-    """
-    out_feat = Path(features_dir)
-    out_test = Path(test_dir)
-
-    def _save_parquet_or_csv(df: pd.DataFrame, path: Path) -> None:
-        try:
-            df.to_parquet(path, index=False)
-        except Exception:
-            # Fallback when parquet engine is unavailable: write CSV next to intended parquet
-            csv_path = path.with_suffix('.csv')
-            df.to_csv(csv_path, index=False)
-    for part, bundle in features.items():
-        df = bundle['df']  # type: ignore[assignment]
-        first_dispo_date = bundle.get('first_dispo_date')  # type: ignore[assignment]
-
-        # write historical subset
-        part_dir = out_feat / str(part)
-        part_dir.mkdir(parents=True, exist_ok=True)
-        if not hist_df.empty:
-            _save_parquet_or_csv(hist_df, part_dir / 'features.parquet')
-            try:
-                hist_df.to_excel(part_dir / 'features.xlsx', index=False)
-            except Exception:
-                pass
-        else:
-            # create empty placeholder (CSV) to signal existence if parquet not available
-            _save_parquet_or_csv(hist_df, part_dir / 'features.parquet')
-
-        # write dispo subset
-        part_dir_t = out_test / str(part)
-        part_dir_t.mkdir(parents=True, exist_ok=True)
-        if not dispo_df.empty:
-            _save_parquet_or_csv(dispo_df, part_dir_t / 'features.parquet')
-            try:
-                dispo_df.to_excel(part_dir_t / 'features.xlsx', index=False)
-            except Exception:
-                pass
-        else:
-            _save_parquet_or_csv(dispo_df, part_dir_t / 'features.parquet')
 
 
-###############################
-# Selective build (feature registry)
-###############################
-
+# Stellt die verfügbaren Feature-Namen zentral bereit, damit GUIs und Skripte Auswahllisten anzeigen können.
 def _list_registry_features() -> list[str]:
-    """Names of selectable features exposed to the GUI."""
+    # Gibt die Liste der in der Oberfläche auswählbaren Features zurück.
     return [
-        # Transforms on EoD_noSiBe
+        # Transformationen auf EoD_noSiBe
         'EoD_Bestand_noSiBe_log1p',
         'EoD_Bestand_noSiBe_z_Teil',
         'EoD_Bestand_noSiBe_robz_Teil',
         'DeficitPos_log1p',
-        # Demand rollings (WBZ-relative facs like in legacy pipeline)
+        # Nachfrage-Rollfenster (WBZ-relative Faktoren wie im alten Prozess).
         'DemandMean_100', 'DemandMax_100',
         'DemandMean_66', 'DemandMax_66',
         'DemandMean_50', 'DemandMax_50',
         'DemandMean_25', 'DemandMax_25',
-        # Demand transforms
+        # Nachfrage-Transformationen
         'DemandMean_100_log1p', 'DemandMean_100_z_Teil', 'DemandMean_100_robz_Teil',
         'DemandMax_100_log1p', 'DemandMax_100_z_Teil', 'DemandMax_100_robz_Teil',
         'DemandMean_66_log1p', 'DemandMean_66_z_Teil', 'DemandMean_66_robz_Teil',
@@ -792,7 +746,7 @@ def _list_registry_features() -> list[str]:
         'DemandMax_50_log1p', 'DemandMax_50_z_Teil', 'DemandMax_50_robz_Teil',
         'DemandMean_25_log1p', 'DemandMean_25_z_Teil', 'DemandMean_25_robz_Teil',
         'DemandMax_25_log1p', 'DemandMax_25_z_Teil', 'DemandMax_25_robz_Teil',
-        # Lag features (Punkt-Lags und Mittelwert-Lags)
+        # Verzögerungs-Features (Punkt- und Mittelwert-Lags).
         # Punkt-Lags: Wert von EoD_noSiBe vor n Tagen
         'Lag_EoD_Bestand_noSiBe_7Tage',
         'Lag_EoD_Bestand_noSiBe_28Tage',
@@ -806,6 +760,7 @@ def _list_registry_features() -> list[str]:
     ]
 
 
+# Listet die vorhandenen Label-Namen, aus denen Anwender wählen können.
 def _list_registry_labels() -> list[str]:
     return [
         'L_WBZ_BlockMinAbs',
@@ -813,28 +768,29 @@ def _list_registry_labels() -> list[str]:
     ]
 
 
+# Öffentliche Helferfunktion, die die Feature-Liste für Oberflächen oder Skripte zurückgibt.
 def list_available_feature_names() -> list[str]:
     return _list_registry_features()
 
 
+# Öffentliche Helferfunktion, die die Label-Liste für Oberflächen oder Skripte zurückgibt.
 def list_available_label_names() -> list[str]:
     return _list_registry_labels()
 
 
+# Berechnet nur die ausgewählten Features und ergänzt automatisch benötigte Hilfsspalten.
 def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.DataFrame:
-    """Compute selected features on top of a core dataframe.
-
-    Core df must contain: Teil, Datum, EoD_Bestand_noSiBe, WBZ_Days.
-    """
+    # Berechnet nur die angeforderten Features auf Basis eines Kern-DataFrames mit Teil, Datum, Bestand und WBZ.
     out = df.copy()
-    # base series
+    # Basisreihen
     eod = pd.to_numeric(out.get('EoD_Bestand_noSiBe'), errors='coerce')
     wbz = pd.to_numeric(out.get('WBZ_Days'), errors='coerce').fillna(14)
 
-    # demand events from inventory deltas (legacy convention)
+    # Bedarfssignale aus Bestandsänderungen (historische Konvention).
     demand_series = (out['EoD_Bestand_noSiBe'].shift(1) - out['EoD_Bestand_noSiBe']).clip(lower=0).fillna(0)
 
-    # helpers
+    # Helferfunktionen
+    # Standardisiert eine Kennzahl je Teil, indem Mittelwert und Standardabweichung pro Teil verwendet werden.
     def _z_by_part(s: pd.Series) -> pd.Series:
         if 'Teil' not in out.columns:
             return s * 0
@@ -843,6 +799,7 @@ def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.Data
         std = grp.transform('std').replace(0, np.nan)
         return ((s - mean) / std).fillna(0)
 
+    # Robuste Standardisierung je Teil auf Basis von Median und Interquartilsabstand.
     def _robz_by_part(s: pd.Series) -> pd.Series:
         if 'Teil' not in out.columns:
             return s * 0
@@ -853,7 +810,7 @@ def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.Data
         iqr = (q75 - q25).replace(0, np.nan)
         return ((s - med) / iqr).fillna(0)
 
-    # --- EoD transforms ---
+    # --- EoD-Transformationen ---
     if 'EoD_Bestand_noSiBe_log1p' in selected:
         out['EoD_Bestand_noSiBe_log1p'] = np.log1p(eod.clip(lower=0))
     if 'EoD_Bestand_noSiBe_z_Teil' in selected:
@@ -867,7 +824,7 @@ def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.Data
     if 'DeficitPos_log1p' in selected:
         out['DeficitPos_log1p'] = np.log1p((-eod).clip(lower=0))
 
-    # --- Demand windows (WBZ-relative factors like legacy: 100,66,50,25) ---
+    # --- Nachfragefenster (WBZ-relative Faktoren wie früher: 100,66,50,25) ---
     fac_map = {
         '100': 1.0,
         '66': 2/3,
@@ -878,17 +835,17 @@ def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.Data
         w = max(1, int(round((wbz if np.isscalar(wbz) else wbz.iloc[0]) * fac)))
         mean_name = f'DemandMean_{key}'
         max_name = f'DemandMax_{key}'
-        # prÃ¼fen, ob Base benÃ¶tigt wird (Base oder ein Transform ist ausgewÃ¤hlt)
+        # prüfen, ob Base benötigt wird (Base oder ein Transform ist ausgewählt)
         mean_trans = [f'{mean_name}_log1p', f'{mean_name}_z_Teil', f'{mean_name}_robz_Teil']
         max_trans = [f'{max_name}_log1p', f'{max_name}_z_Teil', f'{max_name}_robz_Teil']
         need_mean_base = (mean_name in selected) or any(t in selected for t in mean_trans)
         need_max_base = (max_name in selected) or any(t in selected for t in max_trans)
-        # Base berechnen, wenn benÃ¶tigt (auch wenn Base selbst nicht ausgewÃ¤hlt ist)
+        # Base berechnen, wenn benötigt (auch wenn Base selbst nicht ausgewählt ist)
         if need_mean_base and mean_name not in out.columns:
             out[mean_name] = demand_series.shift(1).rolling(w, min_periods=1).mean()
         if need_max_base and max_name not in out.columns:
             out[max_name] = demand_series.shift(1).rolling(w, min_periods=1).max()
-        # transforms
+        # Transformationen
         if f'{mean_name}_log1p' in selected and mean_name in out.columns:
             out[f'{mean_name}_log1p'] = np.log1p(pd.to_numeric(out[mean_name], errors='coerce').clip(lower=0))
         if f'{max_name}_log1p' in selected and max_name in out.columns:
@@ -905,13 +862,13 @@ def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.Data
         if f'{max_name}_robz_Teil' in selected and max_name in out.columns:
             s = pd.to_numeric(out[max_name], errors='coerce').fillna(0); s.name = max_name
             out[f'{max_name}_robz_Teil'] = _robz_by_part(s)
-        # Wenn Base nicht explizit ausgewÃ¤hlt wurde, am Ende wieder entfernen
+        # Wenn Base nicht explizit ausgewählt wurde, am Ende wieder entfernen
         if need_mean_base and (mean_name not in selected) and mean_name in out.columns:
             out.drop(columns=[mean_name], inplace=True)
         if need_max_base and (max_name not in selected) and max_name in out.columns:
             out.drop(columns=[max_name], inplace=True)
 
-    # --- Lags ---
+    # --- Verzögerungen ---
     # Punkt-Lags (reiner Rueckblick auf den Wert vor N Tagen)
     if 'Lag_EoD_Bestand_noSiBe_7Tage' in selected:
         out['Lag_EoD_Bestand_noSiBe_7Tage'] = eod.shift(7)
@@ -923,7 +880,7 @@ def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.Data
     if 'Lag_EoD_Bestand_noSiBe_2xwbzTage' in selected:
         w = int(max(1, (wbz.iloc[0] if len(wbz) else 14) * 2))
         out['Lag_EoD_Bestand_noSiBe_2xwbzTage'] = eod.shift(w)
-    # Mittelwert-Lags (closed=left)
+    # Mittelwert-Lags (Fenster linksgeschlossen)
     if 'Lag_EoD_Bestand_noSiBe_mean_7Tage' in selected:
         out['Lag_EoD_Bestand_noSiBe_mean_7Tage'] = eod.shift(1).rolling(7, min_periods=1).mean()
     if 'Lag_EoD_Bestand_noSiBe_mean_28Tage' in selected:
@@ -938,10 +895,11 @@ def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.Data
     return out
 
 
+# Erstellt die gewünschten Zielspalten und achtet darauf, dass Abhängigkeiten erfüllt sind.
 def _compute_selected_labels(df: pd.DataFrame, selected: list[str]) -> pd.DataFrame:
     out = df.copy()
     if 'L_WBZ_BlockMinAbs' in selected:
-        # WBZ-window min of EoD_noSiBe (positive)
+        # WBZ-Fenster-Minimum von EoD_noSiBe (positiv).
         dates = pd.to_datetime(out['Datum'])
         eod = pd.to_numeric(out['EoD_Bestand_noSiBe'], errors='coerce').fillna(0).to_numpy()
         wbz = pd.to_numeric(out.get('WBZ_Days'), errors='coerce').fillna(14)
@@ -954,7 +912,7 @@ def _compute_selected_labels(df: pd.DataFrame, selected: list[str]) -> pd.DataFr
             y = eod[mask]
             mmin = float(np.nanmin(y)) if y.size else 0.0
             block[i] = max(0.0, -mmin)
-        # optional Faktoren (wie im Hauptpfad), grob angenÃ¤hert per Frequenz/VolatilitÃ¤t
+        # optional Faktoren (wie im Hauptpfad), grob angenähert per Frequenz/Volatilität
         # (bei Bedarf weiter verfeinern)
         out['L_WBZ_BlockMinAbs'] = block
     if 'L_HalfYear_Target' in selected:
@@ -964,15 +922,12 @@ def _compute_selected_labels(df: pd.DataFrame, selected: list[str]) -> pd.DataFr
     return out
 
 
+# Baut für jede Teilnummer eine Basis-Tabelle mit Beständen, Dispo-Daten, Preisen und Stichtagen auf.
 def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
-    """Lightweight core build: only keys, core stocks, WBZ, and SiBe history.
-
-    Returns: part -> core dataframe with at least
-      Teil, Datum, F_NiU_EoD_Bestand, F_NiU_Hinterlegter SiBe, EoD_Bestand_noSiBe, WBZ_Days
-    """
+    # Erstellt eine schlanke Basistabelle je Teil mit Kernspalten wie Bestand, WBZ und SiBe-Historie.
     column_map = _load_column_map(xlsx_path)
     tables = load_all_tables(raw_dir, column_map)
-    # Preis-Map (ohne Datum) aus TeileWert: exakte Spalte 'DPr Material var'
+    # Preis-Zuordnung (ohne Datum) aus TeileWert: exakte Spalte 'DPr Material var'
     price_map_tw: dict[str, float] = {}
     try:
         if 'TeileWert' in tables:
@@ -984,7 +939,7 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
                         price_map_tw[str(_tw.loc[i, 'Teil'])] = float(v)
     except Exception:
         price_map_tw = {}
-    # Determine latest export date across loaded tables (cut for train/test split)
+    # Ermittelt das jüngste Exportdatum über alle Tabellen (Schnitt für Train/Test).
     export_dates: list[pd.Timestamp] = []
     for _df in tables.values():
         if 'ExportDatum' in _df.columns:
@@ -1023,18 +978,18 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
         elif name == 'TeileWert':
             df_tw = df.copy()
             price_col = None
-            # Prio 1: dpr + (wert|preis) + var
+            # Priorität 1: dpr + (wert|preis) + var
             for c in df_tw.columns:
                 lcs = str(c).lower()
                 if ('dpr' in lcs) and (('wert' in lcs) or ('preis' in lcs)) and ('var' in lcs):
                     price_col = c; break
-            # Prio 2: dpr + (wert|preis)
+            # Priorität 2: dpr + (wert|preis)
             if price_col is None:
                 for c in df_tw.columns:
                     lcs = str(c).lower()
                     if ('dpr' in lcs) and (('wert' in lcs) or ('preis' in lcs)):
                         price_col = c; break
-            # Prio 3: material + (wert|preis)
+            # Priorität 3: material + (wert|preis)
             if price_col is None:
                 for c in df_tw.columns:
                     lcs = str(c).lower()
@@ -1090,10 +1045,10 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
             date_set.add(baseline_date)
         if not date_set:
             continue
-        # daily grid
+        # Tagesraster
         full_days = pd.date_range(min(date_set), max(date_set), freq='D')
         feat = pd.DataFrame({'Datum': full_days}); feat['Teil'] = part
-        # merge Lagerbew
+        # Lagerbew-Daten zusammenführen
         if 'Lagerbew' in data:
             lb = data['Lagerbew'][['Datum','Lagerbestand']]
             feat = feat.merge(lb, on='Datum', how='left')
@@ -1101,7 +1056,7 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
             feat['Lagerbestand'] = np.nan
         if baseline_date is not None and feat.loc[feat['Datum']==baseline_date, 'Lagerbestand'].isna().all():
             feat.loc[feat['Datum']==baseline_date, 'Lagerbestand'] = baseline
-        # merge dispo
+        # Dispo-Daten zusammenführen
         if 'Dispo' in data:
             dispo = data['Dispo'][['Datum','net','Bedarfsmenge']]
             feat = feat.merge(dispo, on='Datum', how='left')
@@ -1112,7 +1067,7 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
                 feat.loc[mask,'cum_net'] = feat.loc[mask,'net'].cumsum()
         else:
             feat['net'] = 0; feat['Bedarfsmenge'] = 0; feat['cum_net'] = 0
-        # EoD
+        # Tagesendbestand (EoD)
         if first_dispo_date is not None:
             pre = feat['Datum'] < first_dispo_date
             feat.loc[pre,'EoD_Bestand'] = pd.to_numeric(feat['Lagerbestand'], errors='coerce').ffill()
@@ -1129,13 +1084,13 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
         if _pconst2 is not None:
             feat['Price_Material_var'] = float(_pconst2)
 
-        # SiBe Verlauf (asof)
+        # SiBe-Verlauf per asof-Verknüpfung
         if 'SiBeVerlauf' in data:
             sibe = data['SiBeVerlauf'][['Datum','Im Sytem hinterlgeter SiBe','Alter_SiBe']].copy()
             sibe['Datum'] = pd.to_datetime(sibe['Datum'], errors='coerce').dt.floor('D'); sibe = sibe.dropna(subset=['Datum']).sort_values('Datum')
             merged = pd.merge_asof(feat.sort_values('Datum'), sibe, on='Datum', direction='backward')
             merged['Im Sytem hinterlgeter SiBe'] = pd.to_numeric(merged['Im Sytem hinterlgeter SiBe'], errors='coerce').fillna(0)
-            # Backfill vor erstem Ã„nderungsdatum mit Alter_SiBe (falls vorhanden)
+            # Backfill vor erstem Änderungsdatum mit Alter_SiBe (falls vorhanden)
             try:
                 first_change = sibe['Datum'].min()
                 alter_val = pd.to_numeric(
@@ -1154,7 +1109,7 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
         feat['Hinterlegter_SiBe'] = feat['F_NiU_Hinterlegter SiBe']
         feat['EoD_Bestand_noSiBe'] = feat['EoD_Bestand'] - feat['Hinterlegter_SiBe']
         feat['Flag_StockOut'] = (feat['EoD_Bestand_noSiBe'] <= 0).astype(int)
-        # WBZ from Teilestamm
+        # WBZ aus dem Teilestamm.
         wbz = None
         if 'Teilestamm' in data:
             w = data['Teilestamm']['WBZ'].dropna()
@@ -1165,6 +1120,7 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
     return processed
 
 
+# Steuert den gesamten Feature-Build: schreibt Trainings- und Testtabellen je Teil und nur mit den gewünschten Spalten.
 def run_pipeline_selective(
     raw_dir: str,
     output_dir: str,
@@ -1176,22 +1132,24 @@ def run_pipeline_selective(
     except Exception:
         default_xlsx = Path('Spaltenbedeutung.xlsx')
     core = _build_core_by_part(raw_dir, str(default_xlsx))
+    # Hier liegt je Teilnummer die vorbereitete Basistabelle mit allen Rohinformationen bereit.
     out_root = Path(output_dir)
     out_root.mkdir(parents=True, exist_ok=True)
     test_root = out_root.parent / f"{out_root.name}_Test"
     test_root.mkdir(parents=True, exist_ok=True)
 
     for part, bundle in core.items():
+    # Für jedes Teil werden nun Features, Labels und Dateiablagen erzeugt.
         df = bundle["df"]
         if df.empty:
             continue
         df = df.sort_values('Datum').reset_index(drop=True)
 
-        # Compute selected features/labels
+        # Berechnet die angeforderten Features und Labels.
         df_feat = _compute_selected_features(df, features_to_build)
         df_lab = _compute_selected_labels(df_feat, labels_to_build)
 
-        # Final selection: locked + selected
+        # Finale Auswahl: Pflichtspalten plus gewählte Features.
         locked = [
             'Teil', 'Datum', 'F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe',
             'EoD_Bestand_noSiBe', 'WBZ_Days', 'Price_Material_var'
@@ -1199,16 +1157,17 @@ def run_pipeline_selective(
         final_cols = [c for c in locked + features_to_build + labels_to_build if c in df_lab.columns]
         out_full = df_lab[final_cols].copy()
 
-        # Split by export cut date: train <= cut_date, test > cut_date
+        # Teilt per Export-Stichtag: Train <= cut_date, Test > cut_date.
         cut_date = bundle.get('export_cut_date')
         if isinstance(cut_date, pd.Timestamp):
+        # Anhand des Exportdatums trennen wir in historische Trainings- und zukünftige Dispo-Daten.
             hist_df = out_full[out_full['Datum'] <= cut_date].copy()
             dispo_df = out_full[out_full['Datum'] > cut_date].copy()
         else:
             hist_df = out_full.copy()
             dispo_df = out_full.iloc[0:0].copy()
 
-        # Write historical subset (Features)
+        # Schreibt das historische Teilset (Features).
         part_dir = out_root / str(part)
         part_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -1220,7 +1179,7 @@ def run_pipeline_selective(
         except Exception:
             pass
 
-        # Ensure identical columns and write test subset
+        # Stellt identische Spalten sicher und schreibt den Test-Bereich.
         part_dir_t = test_root / str(part)
         part_dir_t.mkdir(parents=True, exist_ok=True)
         for c in out_full.columns:

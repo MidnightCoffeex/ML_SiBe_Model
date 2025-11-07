@@ -1,5 +1,7 @@
-﻿#!/usr/bin/env python3
-"""Run model evaluation and generate plots."""
+#!/usr/bin/env python3
+# Dieses Skript steuert die modellbasierte Auswertung über die Kommandozeile.
+# Es fragt Pfade und Parameter ab, lädt das Modell und delegiert an die Auswertungslogik.
+# Führt die Modell-Auswertung aus und erzeugt die zugehörigen Diagramme und Dateien.
 from pathlib import Path
 import sys
 
@@ -7,7 +9,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src import evaluate_model
 from src import train_model
 
-# Ensure UTF-8 output for proper Umlaut rendering
+# Stellt eine UTF-8-Ausgabe sicher, damit Umlaute korrekt erscheinen
 try:
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
@@ -15,6 +17,7 @@ except Exception:
     pass
 
 
+# Einstiegspunkt fürs CLI: sammelt Eingaben, lädt Modelle und stößt für jedes Teil die Auswertung an.
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Evaluate trained model")
@@ -67,7 +70,7 @@ def main() -> None:
             print("Verfügbare Modelle:", ", ".join(sorted(existing)))
         args.model_id = input("Modellnummer: ")
 
-    # Optional: evaluate ALL parts when using an ALL model
+    # Optional: bewertet alle Teile, wenn ein ALL-Modell genutzt wird
     if args.part and args.part.upper() == 'ALL':
         sel = eval_part.strip().upper() if isinstance(eval_part, str) else ''
         if sel == 'ALL':
@@ -111,7 +114,7 @@ def main() -> None:
                     for child in plot_dir.iterdir():
                         if child.name not in allowed_files and child.is_file():
                             child.unlink()
-            # After per-part evaluations, build aggregate HTML in 'Alle_Teile'
+            # Nachdem jedes Teil ausgewertet wurde, entsteht die Gesamt-HTML in 'Alle_Teile'
             agg_dir = base_plot_dir / 'Alle_Teile'
             evaluate_model.aggregate_all_parts(aggregate_inputs, str(agg_dir))
             return
@@ -122,7 +125,7 @@ def main() -> None:
         args.plots = input("Ordner für Ergebnisse [plots]: ") or "plots"
     plot_dir = Path(args.plots) / args.part / args.model_type / args.model_id
 
-    # Auto-detect targets if empty
+    # Erkennt Ziele automatisch, falls nichts angegeben wurde
     if not args.targets:
         try:
             df_cols = train_model.load_features(str(features_path)).columns
@@ -131,7 +134,7 @@ def main() -> None:
             elif 'LABLE_HalfYear_Target' in df_cols:
                 target_list = ['LABLE_HalfYear_Target']
             else:
-                # fallback to block label if present
+                # Fällt auf das Block-Label zurück, sofern vorhanden
                 target_list = ['L_WBZ_BlockMinAbs'] if 'L_WBZ_BlockMinAbs' in df_cols or 'L_NiU_WBZ_BlockMinAbs' in df_cols else []
         except Exception:
             target_list = []

@@ -1,11 +1,11 @@
-﻿#!/usr/bin/env python3
-"""Wrapper script for model training.
-
-Erweiterungen:
-- Bei ALL-Training werden alle Teile global zusammengefÃ¼hrt und nach Datum (und Teil) sortiert.
-- Splitting erfolgt datumsbasiert an Tagesgrenzen (TimeSeriesSplit Ã¼ber eindeutige Datumstage),
-  damit keine Zeilen desselben Tages train/test mischen.
-"""
+#!/usr/bin/env python3
+# Dieses Skript sammelt Benutzereingaben über die Konsole und stößt das Training eines oder mehrerer Modelle an.
+# Es sorgt dafür, dass Pfade, Parameter und Zielspalten korrekt gesetzt werden, bevor das eigentliche Training startet.
+# Hülle für das eigentliche Trainingsmodul.
+# Erweiterungen:
+# - Bei ALL-Training werden alle Teile global zusammengeführt und nach Datum (und Teil) sortiert.
+# - Splitting erfolgt datumsbasiert an Tagesgrenzen (TimeSeriesSplit über eindeutige Datumstage),
+#   damit keine Zeilen desselben Tages Training und Test mischen.
 from pathlib import Path
 import sys
 import pandas as pd
@@ -16,13 +16,14 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src import train_model
 import sys
 
-# Ensure UTF-8 output for proper Umlaut rendering
+# Stellt eine UTF-8-Ausgabe sicher, damit Umlaute korrekt erscheinen
 try:
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
 except Exception:
     pass
 
+# Zentrale Routine: fragt alle Parameter ab, bereitet Datenpfade vor und ruft die Trainingsfunktion auf.
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="Train the safety stock model")
@@ -47,7 +48,7 @@ def main() -> None:
     parser.add_argument("--ts_scope", help="Timeseries scope: global|local")
     parser.add_argument("--weight_scheme", help="Weighting: none|blockmin|flag")
     parser.add_argument("--weight_factor", type=float, help="Weight factor for selected scheme")
-    # removed: feature-list JSON; selection happens in feature build step
+    # Hinweis: Die Feature-Listen-JSON entfällt, die Auswahl passiert bereits im Feature-Build.
     parser.add_argument("--progress", action="store_true", help="Show live training progress")
     args = parser.parse_args()
 
@@ -58,12 +59,12 @@ def main() -> None:
     if not args.model_dir:
         args.model_dir = "Modelle"
 
-    # Model type selection (interactive if not provided)
+    # Modelltyp-Abfrage (interaktiv, falls kein Parameter gesetzt wurde)
     if not args.models:
         entry = input("Modelltyp(e) [gb|xgb|lgbm|ALL] [gb]: ")
         args.models = entry.strip() if entry else "gb"
 
-    # Hyperparameters with explanatory prompts
+    # Hyperparameter mit kurzen Erklärungen abfragen
     if args.n_estimators is None:
         entry = input("n_estimators [100]:  ")
         args.n_estimators = int(entry) if entry else 100
@@ -105,7 +106,7 @@ def main() -> None:
 
     part_name = args.part if args.part else "ALL"
 
-    # Expand 'ALL' to all three
+    # 'ALL' bedeutet: alle drei Modellarten nacheinander starten
     if args.models.strip().upper() == 'ALL':
         model_types = ['gb', 'xgb', 'lgbm']
     else:
@@ -116,7 +117,7 @@ def main() -> None:
         existing = [int(p.name) for p in part_dir.glob('*') if p.is_dir() and p.name.isdigit()]
         next_id = max(existing, default=0) + 1
         args.model_id = str(next_id)
-        print(f"Automatisch gewÃ¤hlte Nummer: {args.model_id}")
+        print(f"Automatisch gewählte Nummer: {args.model_id}")
 
     if args.part.upper() == "ALL":
         frames = []
@@ -136,8 +137,8 @@ def main() -> None:
 
     target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
     selected_features = None
-    # Datumsbasierte Splits an Tagesgrenzen: wir fÃ¼hren TimeSeriesSplit Ã¼ber die eindeutigen Tage aus
-    # und mappen anschlieÃŸend zurÃ¼ck auf Zeilenindizes des gefilterten DataFrames.
+    # Datumsbasierte Splits an Tagesgrenzen: wir führen TimeSeriesSplit über die eindeutigen Tage aus
+    # und mappen anschließend zurück auf Zeilenindizes des gefilterten DataFrames.
     def compute_date_based_split_indices(df_full: pd.DataFrame, targets: list[str], n_splits: int = 5):
         df_f = df_full.dropna(subset=targets).copy()
         df_f['__d'] = pd.to_datetime(df_f['Datum'], errors='coerce').dt.floor('D')
@@ -146,7 +147,7 @@ def main() -> None:
         ns = min(n_splits, max(2, len(uniq_days) - 1))
         tscv_local = TimeSeriesSplit(n_splits=ns)
         splits_local = list(tscv_local.split(range(len(uniq_days))))
-        # letzte zwei Folds: (-2) fÃ¼r Val, (-1) fÃ¼r Test
+        # letzte zwei Folds: (-2) für Val, (-1) für Test
         tr_d_ix, val_d_ix = splits_local[-2]
         trfull_d_ix, test_d_ix = splits_local[-1]
         tr_days = set(uniq_days[tr_d_ix])

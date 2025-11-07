@@ -1,4 +1,6 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
+# Diese Datei stellt eine Tkinter-Oberfläche bereit, mit der man Features ohne Kommandozeile generieren kann.
+# Sie sammelt Checkbox-Auswahlen und übergibt sie an die Feature-Pipeline.
 from __future__ import annotations
 
 import tkinter as tk
@@ -7,7 +9,7 @@ from pathlib import Path
 from typing import List
 import sys
 
-# make src importable
+# Macht das src-Verzeichnis importierbar
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from src import data_pipeline
 
@@ -15,7 +17,9 @@ from src import data_pipeline
 LOCKED_BASE = ['F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe', 'EoD_Bestand_noSiBe', 'WBZ_Days', 'Price_Material_var']
 
 
+# Hilfs-Frame mit Scrollbalken, damit lange Listen bequem bedient werden können.
 class ScrollableFrame(tk.Frame):
+    # Legt die scrollbare Leinwand an, damit lange Feature-Listen bedienbar bleiben.
     def __init__(self, master: tk.Misc, *args, **kwargs) -> None:
         super().__init__(master, *args, **kwargs)
         self.canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0)
@@ -27,32 +31,38 @@ class ScrollableFrame(tk.Frame):
         self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
         self.inner.bind("<Configure>", self._on_configure)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
-        # Mouse wheel bindings (Windows/Mac/Linux)
+        # Mausrad-Anbindung für Windows/Mac/Linux
         self.inner.bind_all("<MouseWheel>", self._on_mousewheel, add=False)
         self.inner.bind_all("<Button-4>", self._on_mousewheel_linux, add=False)
         self.inner.bind_all("<Button-5>", self._on_mousewheel_linux, add=False)
 
+    # Aktualisiert den Scrollbereich, sobald sich die Größe der inneren Fläche ändert.
     def _on_configure(self, event=None) -> None:
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
+    # Passt die Breite des Scrollinhalts an die Fenstergröße an.
     def _on_canvas_configure(self, event) -> None:
-        # stretch inner frame to canvas width
+        # Zieht den Innenrahmen auf die Breite der Leinwand
         self.canvas.itemconfig(self._win, width=event.width)
 
+    # Ermöglicht Scrollen mit dem Mausrad auf Windows und macOS.
     def _on_mousewheel(self, event) -> None:
         # Windows/Mac
         delta = int(-1 * (event.delta / 120))
         self.canvas.yview_scroll(delta, "units")
 
+    # Variante für Linux, weil dort andere Mausrad-Events gesendet werden.
     def _on_mousewheel_linux(self, event) -> None:
-        # Linux: Button-4 up, Button-5 down
+        # Linux: Button-4 hoch, Button-5 runter
         if event.num == 4:
             self.canvas.yview_scroll(-1, "units")
         elif event.num == 5:
             self.canvas.yview_scroll(1, "units")
 
 
+# Hauptfenster der Anwendung: bündelt alle Eingaben und Aktionen.
 class App(tk.Tk):
+    # Richtet alle Eingabefelder, Checkboxen und Buttons ein und setzt sinnvolle Standardwerte.
     def __init__(self) -> None:
         super().__init__()
         self.title('Build Features (Selective)')
@@ -61,25 +71,24 @@ class App(tk.Tk):
         self.input_dir: Path | None = None
         self.output_dir: Path | None = None
 
-        # Top: paths
+        # Oberer Bereich: Pfadangaben
         top = tk.Frame(self)
         top.pack(fill=tk.X, padx=10, pady=10)
-
-        tk.Button(top, text='Rohdaten wÃ¤hlen', command=self.pick_input).pack(side=tk.LEFT)
+        tk.Button(top, text='Rohdaten wählen', command=self.pick_input).pack(side=tk.LEFT)
         self.in_label = tk.Label(top, text='Rohdaten: (leer)', anchor='w')
         self.in_label.pack(side=tk.LEFT, padx=10)
 
         bot = tk.Frame(self)
-        bot.pack(fill=tk.X, padx=10)
-        tk.Button(bot, text='Ausgabe wÃ¤hlen', command=self.pick_output).pack(side=tk.LEFT)
+        bot.pack(fill=tk.X, padx=10, pady=(0, 10))
+        tk.Button(bot, text='Ausgabe wählen', command=self.pick_output).pack(side=tk.LEFT)
         self.out_label = tk.Label(bot, text='Ausgabe: GPT_Features_Test (Default)', anchor='w')
         self.out_label.pack(side=tk.LEFT, padx=10)
 
-        # Scrollable content (features + labels)
+        # Scrollbarer Inhalt (Features + Labels)
         scroll = ScrollableFrame(self)
         scroll.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Feature section (ohne Lags)
+        # Feature-Bereich (ohne Lags)
         sec_feat = tk.LabelFrame(scroll.inner, text='Features')
         sec_feat.pack(fill=tk.X, expand=True, padx=5, pady=5)
         self.feature_vars: dict[str, tk.BooleanVar] = {}
@@ -93,7 +102,7 @@ class App(tk.Tk):
             self.feature_vars[name] = var
             tk.Checkbutton(sec_feat, text=name, variable=var, anchor='w', justify='left').pack(fill=tk.X, padx=10)
 
-        # Lag section (eigener Bereich)
+        # Lag-Bereich
         sec_lag = tk.LabelFrame(scroll.inner, text='Lag Features')
         sec_lag.pack(fill=tk.X, expand=True, padx=5, pady=5)
         self.lag_vars: dict[str, tk.BooleanVar] = {}
@@ -103,7 +112,7 @@ class App(tk.Tk):
             self.lag_vars[name] = var
             tk.Checkbutton(sec_lag, text=name, variable=var, anchor='w', justify='left').pack(fill=tk.X, padx=10)
 
-        # Label section
+        # Label-Bereich
         sec_lab = tk.LabelFrame(scroll.inner, text='Labels')
         sec_lab.pack(fill=tk.X, expand=True, padx=5, pady=5)
         self.label_vars: dict[str, tk.BooleanVar] = {}
@@ -116,8 +125,7 @@ class App(tk.Tk):
             self.label_vars[name] = var
             tk.Checkbutton(sec_lab, text=name, variable=var, anchor='w', justify='left').pack(fill=tk.X, padx=10)
 
-        # Run button
-        # Locked base Anzeige
+        # Anzeige der fixen Basis-Features
         frame_locked = tk.Frame(self)
         frame_locked.pack(fill=tk.X, padx=10, pady=(0, 0))
         tk.Label(frame_locked, text='Fixe Basis (immer enthalten):').pack(anchor='w')
@@ -127,18 +135,21 @@ class App(tk.Tk):
 
         tk.Button(self, text='Build', command=self.run_build).pack(side=tk.BOTTOM, pady=15)
 
+    # Öffnet einen Dialog, um den Rohdaten-Ordner auszuwählen.
     def pick_input(self) -> None:
-        sel = filedialog.askdirectory(title='Rohdaten-Ordner wÃ¤hlen')
+        sel = filedialog.askdirectory(title='Rohdaten-Ordner wählen')
         if sel:
             self.input_dir = Path(sel)
             self.in_label.config(text=f'Rohdaten: {self.input_dir}')
 
+    # Öffnet einen Dialog, um den Zielordner für die Features festzulegen.
     def pick_output(self) -> None:
-        sel = filedialog.askdirectory(title='Ausgabe-Ordner wÃ¤hlen')
+        sel = filedialog.askdirectory(title='Ausgabe-Ordner wählen')
         if sel:
             self.output_dir = Path(sel)
             self.out_label.config(text=f'Ausgabe: {self.output_dir}')
 
+    # Liest die gesetzten Checkboxen aus und startet den Feature-Build mit den gewählten Optionen.
     def run_build(self) -> None:
         inp = str(self.input_dir or (Path(__file__).resolve().parents[1] / 'Rohdaten'))
         out = str(self.output_dir or (Path(__file__).resolve().parents[1] / 'GPT_Features_Test'))
@@ -165,6 +176,7 @@ class App(tk.Tk):
             messagebox.showerror('Fehler', str(exc))
 
 
+# Startet die grafische Oberfläche, wenn das Skript direkt ausgeführt wird.
 def main() -> None:
     app = App()
     app.mainloop()

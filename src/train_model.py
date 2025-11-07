@@ -1,4 +1,7 @@
-﻿import argparse
+# Dieses Modul formt aus den Feature-Tabellen Trainingsdaten und führt das Modelltraining durch.
+# Es berechnet nötige Labels, kümmert sich um Gewichte, optionales Cross-Validation und die Fortschrittsanzeige.
+
+import argparse
 from pathlib import Path
 
 import joblib
@@ -20,11 +23,9 @@ import time
 import os
 
 
+# Ermittelt pro Tag, wie stark der Bestand innerhalb eines WBZ-Zeitraums unter null fallen würde.
 def _compute_block_min_abs_label(df: pd.DataFrame, horizon_floor_days: int = 14) -> pd.Series:
-    """Compute L_WBZ_BlockMinAbs on-the-fly:
-    For each date, horizon H = max(WBZ_Days, horizon_floor_days),
-    label = max(0, -min(EoD_Bestand_noSiBe) over [t, t+H)).
-    """
+    # Berechnet L_WBZ_BlockMinAbs direkt aus den Zeitreihen (negativer Bestand innerhalb der WBZ).
     if 'EoD_Bestand_noSiBe' not in df.columns or 'Datum' not in df.columns:
         raise ValueError("Columns 'Datum' and 'EoD_Bestand_noSiBe' are required")
     wbz = pd.to_numeric(df.get('WBZ_Days', 0), errors='coerce').fillna(0).astype(float)
@@ -47,12 +48,9 @@ def _compute_block_min_abs_label(df: pd.DataFrame, horizon_floor_days: int = 14)
     return pd.Series(out, index=df.index, name='L_WBZ_BlockMinAbs')
 
 
+# Glättet das Block-Minimum zu einem halbjählichen Richtwert, damit Empfehlungen stabil bleiben.
 def _compute_halfyear_label_from_block(df: pd.DataFrame, block_col: str = 'L_NiU_WBZ_BlockMinAbs') -> pd.Series:
-    """Compute the half-year windowed constant label from a per-date block-min-abs series.
-    For each start date, pick the next date >= start+6 months as window end; set
-    the label for all rows in that window to the maximum value of the block series
-    within the window. Continue until the end of the series.
-    """
+    # Leitet aus dem Block-Minimum ein halbjahreskonstantes Label ab (fensterweise Maximalwert).
     if 'Datum' not in df.columns:
         raise ValueError("'Datum' column required")
     if block_col not in df.columns:
@@ -80,8 +78,9 @@ def _compute_halfyear_label_from_block(df: pd.DataFrame, block_col: str = 'L_NiU
     result.name = 'L_HalfYear_Target'
     return result
 
+# Lädt Feature-Dateien von der Festplatte und versucht zuerst das schnelle Parquet-Format zu verwenden.
 def load_features(path: str) -> pd.DataFrame:
-    """Load pre-computed features from a parquet file, with CSV fallback."""
+    # Lädt vorberechnete Features bevorzugt aus Parquet und fällt bei Bedarf auf CSV zurück.
     p = Path(path)
     try:
         return pd.read_parquet(p, engine="pyarrow")
@@ -95,18 +94,17 @@ def load_features(path: str) -> pd.DataFrame:
             raise
 
 
+# Entfernt Anzeige-Spalten, stellt sicher, dass Ziele vorhanden sind und liefert X und y für das Training.
 def prepare_data(df: pd.DataFrame, targets: list[str], *, selected_features: list[str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return feature matrix ``X`` and target ``y`` with rows containing NaN
-    in any target removed. Excludes non-feature columns such as nF_* and
-    legacy display columns from X."""
-    # ensure HalfYear label exists if requested; compute from block-min-abs
-    # Compute HalfYear label on demand (supports new name)
+    # Gibt Feature-Matrix X und Ziel y zurück, bereinigt Anzeige-Spalten und entfernt Zeilen mit fehlenden Targets.
+    # Stellt sicher, dass das Halbjahres-Label existiert; bei Bedarf aus BlockMinAbs ableiten.
+    # Berechnet das Halbjahres-Label bei Bedarf dynamisch (unterstützt den neuen Namen).
     if 'L_HalfYear_Target' in targets and 'L_HalfYear_Target' not in df.columns:
         df = df.copy()
-        # prefer using precomputed hidden block label; else compute
+        # Nutzt möglichst das vorberechnete versteckte Block-Label, ansonsten wird es neu berechnet.
         block_col = 'L_NiU_WBZ_BlockMinAbs'
         if block_col not in df.columns:
-            # try legacy names for compatibility
+            # Versucht alte Namensvarianten beizubehalten, um kompatibel zu bleiben.
             if 'L_WBZ_BlockMinAbs' in df.columns:
                 block_col = 'L_WBZ_BlockMinAbs'
             else:
@@ -119,18 +117,18 @@ def prepare_data(df: pd.DataFrame, targets: list[str], *, selected_features: lis
     df = df.dropna(subset=targets)
     y = df[targets]
     drop_cols = set(targets)
-    # Exclude display-only and legacy columns
+    # Entfernt Anzeige- sowie Altspalten aus dem Trainingssatz.
     drop_cols.update([
         "EoD_Bestand",
         "Hinterlegter SiBe",
         "nF_EoD_Bestand",
         "nF_Hinterlegter SiBe",
     ])
-    # Exclude any Not-in-Use columns
+    # Entfernt alle Not-in-Use-Spalten.
     drop_cols.update([c for c in df.columns if isinstance(c, str) and (c.startswith("F_NiU_") or c.startswith("L_NiU_") or c.startswith("nF_"))])
     drop_cols.update([c for c in df.columns if isinstance(c, str) and ("LABLE" in c or "LABEL" in c)])
     if selected_features:
-        # Intersect with allowed feature set
+        # Schneidet auf die erlaubte Featureliste zu.
         keep = [c for c in selected_features if c in df.columns and c not in drop_cols]
         X = df[keep]
     else:
@@ -139,6 +137,7 @@ def prepare_data(df: pd.DataFrame, targets: list[str], *, selected_features: lis
     return X, y
 
 
+# Trainiert das klassische scikit-learn Gradient Boosting Modell mit den gewünschten Parametern.
 def train_gradient_boosting_model(
     X: pd.DataFrame,
     y: pd.DataFrame,
@@ -149,7 +148,7 @@ def train_gradient_boosting_model(
     subsample: float = 1.0,
     sample_weight: np.ndarray | None = None,
 ) -> MultiOutputRegressor:
-    """Train a multi-output Gradient Boosting regressor."""
+    # Trainiert einen Multi-Output-Gradient-Boosting-Regressor aus scikit-learn.
     base = GradientBoostingRegressor(
         random_state=0,
         n_estimators=n_estimators,
@@ -162,6 +161,7 @@ def train_gradient_boosting_model(
     return model
 
 
+# Trainiert ein XGBoost-Modell, sofern die Bibliothek installiert ist.
 def train_xgboost_model(
     X: pd.DataFrame,
     y: pd.DataFrame,
@@ -172,7 +172,7 @@ def train_xgboost_model(
     subsample: float = 1.0,
     sample_weight: np.ndarray | None = None,
 ) -> MultiOutputRegressor:
-    """Train a multi-output XGBoost regressor."""
+    # Trainiert einen Multi-Output-XGBoost-Regressor.
     from xgboost import XGBRegressor
 
     base = XGBRegressor(
@@ -188,6 +188,7 @@ def train_xgboost_model(
     return model
 
 
+# Trainiert ein LightGBM-Modell, sofern die Bibliothek vorhanden ist.
 def train_lightgbm_model(
     X: pd.DataFrame,
     y: pd.DataFrame,
@@ -198,7 +199,7 @@ def train_lightgbm_model(
     subsample: float = 1.0,
     sample_weight: np.ndarray | None = None,
 ) -> MultiOutputRegressor:
-    """Train a multi-output LightGBM regressor."""
+    # Trainiert einen Multi-Output-LightGBM-Regressor.
     from lightgbm import LGBMRegressor
 
     base = LGBMRegressor(
@@ -213,14 +214,7 @@ def train_lightgbm_model(
     return model
 
 
-# Backwards compatibility
-def train_model(
-    X: pd.DataFrame,
-    y: pd.DataFrame,
-    **kwargs,
-) -> MultiOutputRegressor:
-    return train_gradient_boosting_model(X, y, **kwargs)
-
+# Rückwärtskompatibilität
 
 def run_training_df(
     df: pd.DataFrame,
@@ -239,11 +233,12 @@ def run_training_df(
     selected_features: list[str] | None = None,
     progress: bool = False,
 ) -> tuple[list[float], list[float]]:
-    """Train a model from an already loaded DataFrame."""
+    # Trainiert ein Modell direkt auf einem bereits geladenen DataFrame.
     X, y = prepare_data(df, targets, selected_features=selected_features)
+    # Ab hier arbeiten wir nur noch mit numerischen Features und Zielwerten.
     # Default: alle Gewichte = 1
     weights = np.ones(len(y), dtype=float)
-    # Optionale Gewichtung: Zeilen mit L_NiU_StockOut_MinAdd > 0 hÃ¶her gewichten
+    # Optionale Gewichtung: Zeilen mit L_NiU_StockOut_MinAdd > 0 höher gewichten
     # Wichtig: auf dieselben Zeilen indizieren wie X/y (Index beibehalten)
     if weight_scheme:
         scheme = (weight_scheme or "none").strip().lower()
@@ -265,6 +260,7 @@ def run_training_df(
         print("Warning: very few training samples; results may be unreliable")
 
     if split_indices is None:
+    # Falls keine Splits vorgegeben sind, erstellen wir zeitbasierte Trainings- und Testfenster.
         tscv = TimeSeriesSplit(n_splits=5)
         splits = list(tscv.split(X))
         train_idx, val_idx = splits[-2]
@@ -281,8 +277,10 @@ def run_training_df(
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
-    # Progress support helpers
+    # Hilfsfunktionen für den Fortschrittsbalken
+    # Kleine Fortschrittsanzeige für die Konsole, damit lange Trainingsläufe sichtbar bleiben.
     class _ProgressBar:
+        # Legt Gesamtumfang und Status der Fortschrittsanzeige fest.
         def __init__(self, total: int, label: str = "Training") -> None:
             self.total = max(1, int(total))
             self.current = 0
@@ -290,8 +288,10 @@ def run_training_df(
             self._stop = threading.Event()
             self._lock = threading.Lock()
             self._thread = threading.Thread(target=self._run, daemon=True)
+        # Startet den Hintergrund-Thread, der den Balken regelmäßig aktualisiert.
         def start(self) -> None:
             self._thread.start()
+        # Stoppt die Anzeige und sorgt dafür, dass zuletzt 100 % gezeigt werden.
         def stop(self) -> None:
             self._stop.set()
             self._thread.join(timeout=1.0)
@@ -299,13 +299,16 @@ def run_training_df(
                 self.current = self.total
             self._render(final=True)
             sys.stdout.write("\n"); sys.stdout.flush()
+        # Erhöht den Fortschritt um n Schritte, typischerweise nach jedem Fit.
         def tick(self, n: int = 1) -> None:
             with self._lock:
                 self.current = min(self.total, self.current + n)
+        # Arbeitet im Hintergrund und zeichnet den Balken in kurzen Abständen neu.
         def _run(self) -> None:
             while not self._stop.is_set():
                 self._render()
                 time.sleep(0.1)
+        # Baut die Textdarstellung des Balkens zusammen und schreibt sie in die Konsole.
         def _render(self, final: bool = False) -> None:
             with self._lock:
                 cur = self.current; total = self.total
@@ -316,6 +319,7 @@ def run_training_df(
             sys.stdout.write(f"\r{self.label} [{bar}] {pct:3d}% ({cur}/{total})")
             sys.stdout.flush()
 
+    # Spezialvariante für das scikit-learn Modell: nach jedem Estimator wird der Fortschritt aktualisiert.
     def _train_gb_with_progress(Xtr, Ytr, sw, label: str):
         pbar = _ProgressBar(total=n_estimators * Ytr.shape[1], label=label)
         pbar.start()
@@ -339,7 +343,7 @@ def run_training_df(
         m.estimators_ = estimators
         return m
 
-    # First fit
+    # Erster Fit
     if model_type == "gb" and (progress or os.environ.get('TRAIN_PROGRESS') == '1'):
         model = _train_gb_with_progress(X.iloc[train_idx], y.iloc[train_idx], weights[train_idx], label="Training gb")
     else:
@@ -358,7 +362,7 @@ def run_training_df(
     val_r2 = r2_score(y.iloc[val_idx], val_pred, multioutput="raw_values")
     val_mape = mean_absolute_percentage_error(y.iloc[val_idx], val_pred)
 
-    # refit on all data except test
+    # Anschließend erneuter Fit auf allen Daten außer dem Testbereich
     if model_type == "gb" and (progress or os.environ.get('TRAIN_PROGRESS') == '1'):
         model = _train_gb_with_progress(X.iloc[train_full_idx], y.iloc[train_full_idx], weights[train_full_idx], label="Refit gb")
     else:
@@ -465,6 +469,7 @@ def run_training_df(
 
     return test_mae.tolist(), test_rmse.tolist()
 
+# Komfortfunktion für die CLI: lädt Features von der Platte und trainiert alle gewünschten Modellvarianten hintereinander.
 def run_training(
     features_path: str,
     model_dir: str,

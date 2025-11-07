@@ -1,4 +1,7 @@
-﻿from pathlib import Path
+# Dieses Modul lädt trainierte Modelle, bewertet sie auf bereitgestellten Features und erzeugt Auswertungsberichte.
+# Es erstellt sowohl Kennzahlen als auch HTML/Excel-Dateien, damit Fachanwender die Ergebnisse nachvollziehen können.
+
+from pathlib import Path
 from typing import Tuple, Optional
 
 import joblib
@@ -22,8 +25,9 @@ import numpy as np
 from .train_model import load_features, prepare_data
 
 
+# Prüft die Dispo-Rohdaten, um den Zeitraum der Disposition für eine Teilnummer zu bestimmen.
 def _dispo_date_range(raw_dir: str, part: str) -> Tuple[pd.Timestamp | None, pd.Timestamp | None]:
-    """Return min and max date for the given part in the Dispo CSV exports."""
+# Ermittelt den ersten und letzten Dispo-Tag für ein Teil anhand der Rohdaten.
     dates: list[pd.Series] = []
     for csv in Path(raw_dir).glob("*_Dispo.csv"):
         try:
@@ -48,6 +52,7 @@ def _dispo_date_range(raw_dir: str, part: str) -> Tuple[pd.Timestamp | None, pd.
     return None, None
 
 
+# Sucht eine Spalte unabhängig davon, ob sie als NiU- oder Anzeige-Spalte vorliegt.
 def _resolve_col(df: pd.DataFrame, base: str) -> Optional[str]:
     for cand in (base, f"F_NiU_{base}", f"nF_{base}"):
         if cand in df.columns:
@@ -55,6 +60,7 @@ def _resolve_col(df: pd.DataFrame, base: str) -> Optional[str]:
     return None
 
 
+# Berechnet Kennzahlen für einen Zeitraum und erzeugt die dazugehörigen Tabellen sowie Visualisierungen.
 def _evaluate_range(
     results: pd.DataFrame,
     prefix: str,
@@ -66,14 +72,11 @@ def _evaluate_range(
     export_static_timeline: bool = True,
     export_interactive_timeline: bool = True,
 ) -> pd.DataFrame | None:
-    """Save predictions and plots for a given subset.
-
-    Returns the (potentially enriched) ``results`` DataFrame so callers may reuse
-    the predictions without relying on exported files.
-    """
+    # Speichert Vorhersagen und Plots für einen Teilzeitraum und gibt die erweiterten Ergebnisse zurück.
     if results.empty:
         return None
     results = results.sort_values("Datum")
+    # Sortiert die Tabelle chronologisch, damit Plots und Kennzahlen stimmen.
     pred_col = f"pred_{target}"
 
     actual_col = (
@@ -81,7 +84,7 @@ def _evaluate_range(
         if "F_NiU_Hinterlegter SiBe" in results.columns
         else ("nF_Hinterlegter SiBe" if "nF_Hinterlegter SiBe" in results.columns else "Hinterlegter SiBe")
     )
-    # Friendly naming and heading (Teil/WBZ)
+    # Freundliche Bezeichnungen und Überschrift (Teil/WBZ)
     name_pred = "KI: Vorgeschlagener SiBe"
     name_eod = "Gesamtbestand ohne SiBe"
     name_actual_sibe = "Aktueller hinterlegter SiBe"
@@ -89,7 +92,7 @@ def _evaluate_range(
     name_peak = "Quartal - Spitzenwert"
     name_peak_combined = "Quartal - Spitzenwert + Gesamtbestand ohne SiBe"
     part_txt = str(results.get("Teil").iloc[0]) if "Teil" in results.columns and not results.empty else ""
-    # WBZ-Days (robust gegenueber NiU-Prefix)
+    # WBZ-Tage (robust gegenüber NiU-Prefix)
     wbz_col = _resolve_col(results, "WBZ_Days")
     wbz_val = results.get(wbz_col).iloc[0] if wbz_col and not results.empty else None
     wbz_txt = f" | WBZ: {int(wbz_val)} Tage" if isinstance(wbz_val, (int, float)) and pd.notna(wbz_val) else ""
@@ -103,6 +106,7 @@ def _evaluate_range(
     )
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+    # Legt den Ausgabeordner an, falls er noch nicht existiert.
     mode = (table_mode or "none").lower()
     csv_path = Path(output_dir) / f"{prefix}_predictions.csv"
     xlsx_path = Path(output_dir) / f"{prefix}_predictions.xlsx"
@@ -155,7 +159,7 @@ def _evaluate_range(
         plt.close()
 
     if export_interactive_timeline:
-        # Prepare an upper-envelope (peak) curve of the clamped predictions
+        # Skizziert eine obere Hüllkurve der begrenzten Vorhersagen
         pred_col = f"pred_{target}"
         dates_series = pd.to_datetime(results["Datum"], errors="coerce")
         if not dates_series.empty:
@@ -202,7 +206,7 @@ def _evaluate_range(
             row=1,
             col=1,
         )
-        # Overlay the actual training label as a medium-light gray line (if present)
+        # Legt das tatsächliche Trainingslabel als mittelgraue Linie darüber (falls vorhanden)
         if target in results.columns:
             try:
                 lab_series = pd.to_numeric(results[target], errors="coerce")
@@ -271,7 +275,7 @@ def _evaluate_range(
                 col=1,
             )
 
-        # Row 4: peak curve of predictions
+        # Zeile 4: Spitzenkurve der Vorhersagen
         fig2.add_trace(
             go.Scatter(
                 x=results["Datum"],
@@ -284,7 +288,7 @@ def _evaluate_range(
             col=1,
         )
 
-        # Row 5: peak curve + EoD_Bestand_noSiBe
+        # Zeile 5: Spitzenkurve plus EoD_Bestand_noSiBe
         if eod_col:
             combined2 = results[eod_col] + results["pred_peak_curve"]
             fig2.add_trace(
@@ -312,12 +316,13 @@ def _evaluate_range(
         fig2.update_xaxes(title_text="Datum", row=5, col=1)
         fig2.write_html(Path(output_dir) / f"{prefix}_predictions_over_time.html")
 
-        # help GC
+        # Hilft beim Aufräumen des Speichers
         del fig2
 
     return results
 
 
+# Lädt Features und Modell, erstellt Vorhersagen und ruft die Auswertungsroutinen auf.
 def run_evaluation(
     features_path: str,
     model_path: str,
@@ -327,7 +332,7 @@ def run_evaluation(
     model_type: str | None = None,
     selected_features: list[str] | None = None,
 ) -> dict[str, pd.DataFrame | None] | None:
-    """Evaluate the trained model and generate plots for multiple time frames."""
+    # Bewertet ein trainiertes Modell, erstellt Metriken und legt die Diagramme ab.
     if model_type is None:
         parts = set(Path(model_path).parts)
         for cand in ["gb", "xgb", "lgbm"]:
@@ -336,9 +341,11 @@ def run_evaluation(
                 break
 
     df = load_features(features_path)
+    # Lädt die vorberechneten Features von der Festplatte.
     X, y = prepare_data(df, targets, selected_features=selected_features)
+    # Formt die geladenen Daten in Features und Ziele für das Modell.
     n = len(X)
-    # Not enough samples to evaluate robustly -> skip gracefully
+    # Zu wenige Stichproben für eine robuste Auswertung -> überspringen
     if n < 3:
         print(f"Skip evaluation ({prefix if 'prefix' in locals() else 'ALL'}): not enough samples (n={n}).")
         return
@@ -358,13 +365,13 @@ def run_evaluation(
         train_full_idx = train_idx
         test_idx = np.arange(max(1, n - 1), n)
 
-    # If no test samples available, skip to avoid metric errors
+    # Ohne Testsamples überspringen, um Kennzahlenfehler zu vermeiden
     if test_idx.size == 0 or train_full_idx.size == 0:
         print(f"Skip evaluation ({prefix if 'prefix' in locals() else 'ALL'}): insufficient split sizes (n={n}).")
         return
     model = joblib.load(model_path)
 
-    # Align features to model's expected columns if available
+    # Passt die Features an die vom Modell erwarteten Spalten an (falls vorhanden)
     def _align_features(Xin: pd.DataFrame) -> pd.DataFrame:
         try:
             ests = getattr(model, 'estimators_', None)
@@ -384,7 +391,7 @@ def run_evaluation(
 
     X_test_aligned = _align_features(X.iloc[test_idx].copy())
     y_pred_test = model.predict(X_test_aligned)
-    # Clamp negative predictions to 0
+    # Begrenze negative Vorhersagen auf 0
     y_pred_test = np.clip(y_pred_test, 0, None)
     mae = mean_absolute_error(y.iloc[test_idx], y_pred_test, multioutput="raw_values")
     rmse = np.sqrt(mean_squared_error(y.iloc[test_idx], y_pred_test, multioutput="raw_values"))
@@ -392,7 +399,7 @@ def run_evaluation(
     mape = mean_absolute_percentage_error(y.iloc[test_idx], y_pred_test)
     print("Test Metrics -> MAE:", mae, "RMSE:", rmse, "R2:", r2, "MAPE:", mape)
 
-    # predictions for the entire feature set
+    # Vorhersagen für den gesamten Feature-Satz
     drop_cols = set(targets)
     drop_cols.update(["EoD_Bestand", "Hinterlegter SiBe"]) 
     drop_cols.update([c for c in df.columns if isinstance(c, str) and (c.startswith("F_NiU_") or c.startswith("L_NiU_") or c.startswith("nF_"))])
@@ -401,25 +408,25 @@ def run_evaluation(
     X_full = X_full.select_dtypes(include=["number"]).fillna(0)
     X_full = _align_features(X_full)
     full_pred = model.predict(X_full)
-    # Clamp negative predictions to 0
+    # Begrenze negative Vorhersagen auf 0
     full_pred = np.clip(full_pred, 0, None)
     results_full = df.copy()
     for i, col in enumerate(targets):
         results_full[f"pred_{col}"] = full_pred[:, i]
 
     part = str(df["Teil"].iloc[0]) if "Teil" in df.columns else ""
-    # Ensure an 'Hinterlegter SiBe' column exists for plotting/metrics
+    # Stellt sicher, dass eine Spalte 'Hinterlegter SiBe' für Plots und Kennzahlen vorhanden ist
     if "Hinterlegter SiBe" not in results_full.columns:
         for cand in ("Hinterlegter_SiBe", "F_NiU_Hinterlegter SiBe", "nF_Hinterlegter SiBe"):
             if cand in results_full.columns:
                 results_full["Hinterlegter SiBe"] = results_full[cand]
                 break
         if "Hinterlegter SiBe" not in results_full.columns:
-            # fallback to zeros
+            # Rückfall auf Nullen
             results_full["Hinterlegter SiBe"] = 0.0
     dispo_start, dispo_end = _dispo_date_range(raw_dir, part)
 
-    # Evaluation for specified ranges
+    # Auswertung für die angeforderten Zeitbereiche
     full_prefix = "Full_Time"
     results_full_view = _evaluate_range(
         results_full,
@@ -448,7 +455,7 @@ def run_evaluation(
         )
         if results_dispo_view is None:
             print(
-                f"Dispo-Zeitraum leer f�r Teil {part} -> nutze gesamten Verlauf f�r Ausgabe."
+                f"Dispo-Zeitraum leer fï¿½r Teil {part} -> nutze gesamten Verlauf fï¿½r Ausgabe."
             )
             results_dispo_view = _evaluate_range(
                 results_full,
@@ -462,7 +469,7 @@ def run_evaluation(
             )
     else:
         print(
-            f"Kein Dispo-Zeitraum f�r Teil {part} gefunden -> nutze gesamten Verlauf f�r Ausgabe."
+            f"Kein Dispo-Zeitraum fï¿½r Teil {part} gefunden -> nutze gesamten Verlauf fï¿½r Ausgabe."
         )
         results_dispo_view = _evaluate_range(
             results_full,
@@ -475,7 +482,7 @@ def run_evaluation(
             export_interactive_timeline=True,
         )
 
-    # Training history from model
+    # Trainingshistorie aus dem Modell
     if hasattr(model, "train_score_"):
         plt.figure()
         sns.lineplot(x=range(1, len(model.train_score_) + 1), y=model.train_score_)
@@ -501,8 +508,9 @@ def run_evaluation(
     }
 
 
+# Fasst die Ergebnisse vieler Teile zusammen und baut Gesamtberichte für alle Teile auf.
 def aggregate_all_parts(results_by_part: dict[str, pd.DataFrame | None], out_dir: str) -> None:
-    """Aggregate part-level predictions that were returned by ``run_evaluation``."""
+    # Fasst die einzelnen Teil-Auswertungen zusammen und baut die Gesamtberichte.
     if not results_by_part:
         print("Keine Ergebnisse zur Aggregation - ueberspringe.")
         return
@@ -576,6 +584,7 @@ def aggregate_all_parts(results_by_part: dict[str, pd.DataFrame | None], out_dir
 
     full_index = pd.date_range(global_min, global_max, freq='D')
 
+    # Baut die Texte für die Tooltipps, damit im Plot die wichtigsten Teile pro Tag sichtbar werden.
     def _build_top_hover(source_df: pd.DataFrame, value_col: str, dates: list[pd.Timestamp]) -> list[str]:
         grouped = (
             source_df.groupby(['Datum', 'Teil'])[value_col]
@@ -716,7 +725,7 @@ def aggregate_all_parts(results_by_part: dict[str, pd.DataFrame | None], out_dir
     fig.update_yaxes(title_text='EUR (aggregiert)', row=2, col=1)
     fig.write_html(outp / 'Alle_Teile.html')
 
-    # No-forward variant (no datum carry-forward)
+    # Variante ohne Vorwärtsfüllung (kein Datumsvorlauf)
     long_df_no_forward = pd.concat(raw_frames, ignore_index=True)
     helper_path_no_forward = outp / 'Alle_Teile_Tageswerte_no_forward.xlsx'
     try:

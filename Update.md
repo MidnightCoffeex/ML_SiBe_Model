@@ -5,7 +5,7 @@ Dieser Verlauf fasst die wichtigsten Schritte von der ursprünglichen Pipeline b
 ## 2025‑09 (frühe Phase)
 - Initiale Pipeline: CSV‑Parsing (inkl. `Spaltenbedeutung.xlsx`), Tagesaggregation, Dispo‑Logik, SiBe‑Verlauf, erste Anzeige‑Spalten.
 - Erste Rolling‑Features: `DemandMean_*`, `DemandMax_*`.
-- Skripte: `build_features.py`, `train.py`, `evaluate.py`.
+- Skripte: `train.py`, `evaluate.py`.
 
 ## 2025‑09‑30
 - Einführung Ziel `L_HalfYear_Target`: halbjährlich konstanter Zielwert aus dem Maximum von `L_NiU_WBZ_BlockMinAbs` pro Halbjahr, leichte Faktoren (WBZ, Aktivität, Volatilität) vorsichtig berücksichtigt.
