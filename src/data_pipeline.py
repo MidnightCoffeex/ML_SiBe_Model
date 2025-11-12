@@ -255,7 +255,7 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
         elif name == 'SiBeVerlauf':
             df_s = df.copy()
             # Vereinheitlicht neue Schemas auf die alten Spaltennamen, damit nachgelagerte Schritte stabil bleiben.
-            # tolerate columns like 'Datum ïÂ¿Â½nderung'
+            # tolerate columns like 'Datum ïÂ¿½nderung'
             dchange = None
             for c in df_s.columns:
                 lcs = str(c).lower()
