@@ -344,6 +344,12 @@ def run_evaluation(
     # Lädt die vorberechneten Features von der Festplatte.
     X, y = prepare_data(df, targets, selected_features=selected_features)
     # Formt die geladenen Daten in Features und Ziele für das Modell.
+    part_label = (
+        str(df["Teil"].iloc[0])
+        if "Teil" in df.columns and not df.empty
+        else "ALL"
+    )
+    print(f"\n=== Auswertung Teil {part_label} ===")
     n = len(X)
     # Zu wenige Stichproben für eine robuste Auswertung -> überspringen
     if n < 3:
@@ -414,7 +420,7 @@ def run_evaluation(
     for i, col in enumerate(targets):
         results_full[f"pred_{col}"] = full_pred[:, i]
 
-    part = str(df["Teil"].iloc[0]) if "Teil" in df.columns else ""
+    part = part_label
     # Stellt sicher, dass eine Spalte 'Hinterlegter SiBe' für Plots und Kennzahlen vorhanden ist
     if "Hinterlegter SiBe" not in results_full.columns:
         for cand in ("Hinterlegter_SiBe", "F_NiU_Hinterlegter SiBe", "nF_Hinterlegter SiBe"):
@@ -501,6 +507,7 @@ def run_evaluation(
         )
         fig_hist.write_html(Path(output_dir) / "training_history.html")
 
+    print("")
     return {
         "part": part,
         "full": results_full_view if results_full_view is not None else results_full,
