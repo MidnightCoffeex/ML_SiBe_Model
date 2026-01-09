@@ -1,0 +1,2 @@
+target,val_mae,val_rmse,val_r2,val_mape,test_mae,test_rmse,test_r2,test_mape
+L_WBZ_BlockMinAbs,361.9695,1267.0262,0.55735004,6.386580635024097e+17,422.76157,1514.1022,-0.0712415,9.061713728440893e+17

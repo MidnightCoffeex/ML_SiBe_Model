@@ -211,6 +211,89 @@ def _prepare_dispo(df: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
+# Berechnet den Endfaktor (WBZ/Frequenz/Volatilität/Preis) je Halbjahresfenster.
+def _compute_total_factor_by_halfyear(feat: pd.DataFrame) -> np.ndarray:
+    if feat.empty:
+        return np.zeros(0, dtype=float)
+    if 'Datum' not in feat.columns:
+        return np.zeros(len(feat), dtype=float)
+
+    date_list = pd.to_datetime(feat['Datum'], errors='coerce').tolist()
+    demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
+    demand_series = pd.to_numeric(demand_series, errors='coerce').clip(lower=0).fillna(0).to_numpy()
+
+    n = len(feat)
+    f_wbz_arr = np.zeros(n, dtype=float)
+    f_freq_arr = np.zeros(n, dtype=float)
+    f_vol_arr = np.zeros(n, dtype=float)
+    f_price_arr = np.zeros(n, dtype=float)
+
+    p_factor = None
+    if 'Price_Material_var' in feat.columns:
+        p = pd.to_numeric(feat['Price_Material_var'], errors='coerce').fillna(0).astype(float).to_numpy()
+        p_log = np.log1p(np.maximum(0.0, p))
+        if np.any(p_log > 0):
+            scale = np.nanpercentile(p_log[p_log > 0], 95)
+        else:
+            scale = 1.0
+        if scale > 0:
+            p_factor = -0.10 * (p_log / scale)
+        else:
+            p_factor = np.zeros_like(p_log)
+        p_factor = np.clip(p_factor, -0.10, 0.0)
+
+    i = 0
+    while i < n:
+        start = date_list[i]
+        target = start + pd.DateOffset(months=6)
+        j = i
+        while j + 1 < n and date_list[j + 1] < target:
+            j += 1
+        if j + 1 < n and date_list[j] < target <= date_list[j + 1]:
+            j = j + 1
+
+        wbz_eff = float(pd.to_numeric(feat.loc[i, 'WBZ_Days'], errors='coerce')) if 'WBZ_Days' in feat.columns else 0.0
+        if not np.isfinite(wbz_eff) or wbz_eff <= 0:
+            wbz_eff = 14.0
+        wbz_eff = max(14.0, wbz_eff)
+        if wbz_eff <= 28:
+            f_wbz = 0.0
+        elif wbz_eff <= 84:
+            f_wbz = 0.10 * (wbz_eff - 28.0) / (84.0 - 28.0)
+        else:
+            f_wbz = 0.20
+
+        window_days = max(1, int((date_list[j] - date_list[i]).days) + 1)
+        events_window = int(np.sum(demand_series[i:j + 1] > 0))
+        est_events_wbz = events_window * (wbz_eff / window_days)
+        f_freq = 0.20 * (np.log1p(est_events_wbz) / np.log1p(8.0))
+        f_freq = float(min(0.20, max(0.0, f_freq)))
+
+        dwin = demand_series[i:j + 1]
+        mu = float(np.nanmean(dwin)) if dwin.size else 0.0
+        sigma = float(np.nanstd(dwin)) if dwin.size else 0.0
+        cv = (sigma / mu) if mu > 1e-12 else 0.0
+        if cv <= 0.3:
+            f_vol = 0.0
+        elif cv >= 0.8:
+            f_vol = 0.20
+        else:
+            f_vol = 0.20 * (cv - 0.3) / (0.8 - 0.3)
+
+        if p_factor is not None and i < len(p_factor):
+            f_price = float(p_factor[i])
+        else:
+            f_price = 0.0
+
+        f_wbz_arr[i:j + 1] = f_wbz
+        f_freq_arr[i:j + 1] = f_freq
+        f_vol_arr[i:j + 1] = f_vol
+        f_price_arr[i:j + 1] = f_price
+        i = j + 1
+
+    return np.clip(f_wbz_arr + f_freq_arr + f_vol_arr + f_price_arr, 0.0, 0.40)
+
+
 # Ältere Voll-Build-Routine, die aus historischen Gründen erhalten blieb und komplette Teiltabellen erzeugt.
 def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx') -> Dict[str, Dict[str, pd.DataFrame | pd.Timestamp | None]]:
     # Historischer Voll-Build: erstellt für jedes Teil eine Tabelle samt Dispo-Startdatum.
@@ -527,97 +610,11 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
             lbl_block[i] = max(0.0, -mmin)
         # Basiswert des Block-Min-Abs (wird nach Faktorberechnung angepasst)
         block_base = lbl_block.copy()
+        feat['L_WBZ_BlockMinAbs_noFactors'] = block_base
 
-        # Halbjahres-Regel mit Faktoren: Fensterweise (ca. 6 Monate) denselben Wert setzen,
-        # und zwar den Höchstwert von L_NiU_WBZ_BlockMinAbs innerhalb des Fensters,
-        # moduliert durch marginale Faktoren (WBZ, Frequenz, Volatilität), jeweils gecappt.
-        lbl_halfyear_base = np.zeros(len(feat), dtype=float)
-        lbl_halfyear = np.zeros(len(feat), dtype=float)
-        f_wbz_arr = np.zeros(len(feat), dtype=float)
-        f_freq_arr = np.zeros(len(feat), dtype=float)
-        f_vol_arr = np.zeros(len(feat), dtype=float)
-        f_price_arr = np.zeros(len(feat), dtype=float)
-        # Nachfrage-Ereignisse aus demand_series: Ereignis, wenn positive Nachfrage
-        demand_series = feat['EoD_Bestand_noSiBe'].shift(1) - feat['EoD_Bestand_noSiBe']
-        demand_series = pd.to_numeric(demand_series, errors='coerce').clip(lower=0).fillna(0).to_numpy()
-        i = 0
-        while i < len(feat):
-            start = date_list[i]
-            # 6 Monate nach vorn; nächstes verfügbares Datum >= diesem Ziel
-            target = start + pd.DateOffset(months=6)
-            # finde j: erstes Index mit Datum >= target
-            j = i
-            while j + 1 < len(feat) and date_list[j + 1] < target:
-                j += 1
-            # falls nächstes Datum hinter target existiert, auf dieses "aufrunden"
-            if j + 1 < len(feat) and date_list[j] < target <= date_list[j + 1]:
-                j = j + 1
-            # Fenster [i..j]
-            window_max = float(np.nanmax(lbl_block[i:j + 1])) if j >= i else float(lbl_block[i])
-            # Faktoren berechnen (fensterweise konstant)
-            # Idee fuer Laien: Wir nehmen den Basiswert und pruefen vier Einflussfaktoren.
-            # * WBZ-Faktor: je laenger die Wiederbeschaffungszeit, desto konservativer soll der Vorschlag sein (+0 bis +20 %).
-            # * Frequenz-Faktor: treten in einem Fenster viele Bedarfsereignisse auf, erhoehen wir den Vorschlag, weil oft entnommen wird.
-            # * Volatilitaets-Faktor: schwankt die Nachfrage stark, geben wir einen Sicherheitszuschlag bis +20 %.
-            # * Preis-Faktor: sehr teure Teile sollen nicht ueberproportional viel Kapital binden, daher reduziert dieser Faktor bis zu 10 %.
-            wbz_eff = float(pd.to_numeric(feat.loc[i, 'WBZ_Days'], errors='coerce')) if 'WBZ_Days' in feat.columns else 0.0
-            if not np.isfinite(wbz_eff) or wbz_eff <= 0:
-                wbz_eff = 14.0
-            wbz_eff = max(14.0, wbz_eff)
-            # f_wbz: 0..0.20 je nach WBZ-Kategorie (sanft)
-            if wbz_eff <= 28:
-                f_wbz = 0.0
-            elif wbz_eff <= 84:
-                f_wbz = 0.10 * (wbz_eff - 28.0) / (84.0 - 28.0)
-            else:
-                f_wbz = 0.20
-            # Frequenzfaktor: Ereignisse pro Fenster -> auf WBZ skaliert
-            window_days = max(1, int((date_list[j] - date_list[i]).days) + 1)
-            events_window = int(np.sum(demand_series[i:j + 1] > 0))
-            est_events_wbz = events_window * (wbz_eff / window_days)
-            f_freq = 0.20 * (np.log1p(est_events_wbz) / np.log1p(8.0))
-            f_freq = float(min(0.20, max(0.0, f_freq)))
-            # Volatilität (CV) im Fenster
-            dwin = demand_series[i:j + 1]
-            mu = float(np.nanmean(dwin)) if dwin.size else 0.0
-            sigma = float(np.nanstd(dwin)) if dwin.size else 0.0
-            cv = (sigma / mu) if mu > 1e-12 else 0.0
-            if cv <= 0.3:
-                f_vol = 0.0
-            elif cv >= 0.8:
-                f_vol = 0.20
-            else:
-                f_vol = 0.20 * (cv - 0.3) / (0.8 - 0.3)
-            # Preisfaktor (logarithmisch, nur reduzierend, Cap 0.10)
-            if 'Price_Material_var' in feat.columns:
-                p = pd.to_numeric(feat['Price_Material_var'], errors='coerce').fillna(0).astype(float).to_numpy()
-                p_log = np.log1p(np.maximum(0.0, p))
-                scale = np.nanpercentile(p_log[p_log > 0], 95) if np.any(p_log > 0) else 1.0
-                f_price = -0.10 * (p_log / scale) if scale > 0 else np.zeros_like(p_log)
-                f_price = float(np.clip(f_price[i], -0.10, 0.0)) if i < len(f_price) else 0.0
-            else:
-                f_price = 0.0
-            # Die Summe der Faktoren darf maximal +40 % ergeben; negative Effekte koennen nur vom Preis kommen.
-            total_factor = min(0.40, max(0.0, f_wbz + f_freq + f_vol + f_price))
-
-            base_val = window_max
-            final_val = base_val * (1.0 + total_factor)
-            # Das Basislabel wird also mit dem aufsummierten Faktor multipliziert und fuer das gesamte Halbjahr verwendet.
-            lbl_halfyear_base[i:j + 1] = base_val
-            lbl_halfyear[i:j + 1] = final_val
-            f_wbz_arr[i:j + 1] = f_wbz
-            f_freq_arr[i:j + 1] = f_freq
-            f_vol_arr[i:j + 1] = f_vol
-            f_price_arr[i:j + 1] = f_price
-            i = j + 1
-        feat['L_NiU_HalfYear_Base'] = lbl_halfyear_base
-        feat['F_NiU_Factor_WBZ'] = f_wbz_arr
-        feat['F_NiU_Factor_Freq'] = f_freq_arr
-        feat['F_NiU_Factor_Vol'] = f_vol_arr
-        feat['F_NiU_Factor_Price'] = f_price_arr
-        feat['L_HalfYear_Target'] = lbl_halfyear
-        # Faktoren auch auf den per-Date BlockMinAbs anwenden (Clip 0..0.40)
-        total_factor_arr = np.clip(f_wbz_arr + f_freq_arr + f_vol_arr + f_price_arr, 0.0, 0.40)
+        total_factor_arr = _compute_total_factor_by_halfyear(feat)
+        feat['L_WBZ_BlockMinAbs'] = block_base * (1.0 + total_factor_arr)
+        feat['L_WBZ_BlockMinAbs_Factor'] = total_factor_arr
         feat['L_NiU_WBZ_BlockMinAbs'] = block_base * (1.0 + total_factor_arr)
 
         # ----- Rollierende Zeitmerkmale -----
@@ -689,12 +686,9 @@ def build_features_by_part(raw_dir: str, xlsx_path: str = 'Spaltenbedeutung.xlsx
                 'WBZ_Days',
                 'L_NiU_StockOut_MinAdd',
                 'L_NiU_WBZ_BlockMinAbs',
-                'L_NiU_HalfYear_Base',
-                'F_NiU_Factor_WBZ',
-                'F_NiU_Factor_Freq',
-                'F_NiU_Factor_Vol',
-                'F_NiU_Factor_Price',
-                'L_HalfYear_Target',
+                'L_WBZ_BlockMinAbs',
+                'L_WBZ_BlockMinAbs_noFactors',
+                'L_WBZ_BlockMinAbs_Factor',
                 'Price_Material_var',
             ]
             + [
@@ -764,7 +758,8 @@ def _list_registry_features() -> list[str]:
 def _list_registry_labels() -> list[str]:
     return [
         'L_WBZ_BlockMinAbs',
-        'L_HalfYear_Target',
+        'L_WBZ_BlockMinAbs_noFactors',
+        'L_WBZ_BlockMinAbs_Factor',
     ]
 
 
@@ -898,7 +893,12 @@ def _compute_selected_features(df: pd.DataFrame, selected: list[str]) -> pd.Data
 # Erstellt die gewünschten Zielspalten und achtet darauf, dass Abhängigkeiten erfüllt sind.
 def _compute_selected_labels(df: pd.DataFrame, selected: list[str]) -> pd.DataFrame:
     out = df.copy()
-    if 'L_WBZ_BlockMinAbs' in selected:
+    need_block = (
+        'L_WBZ_BlockMinAbs' in selected
+        or 'L_WBZ_BlockMinAbs_noFactors' in selected
+        or 'L_WBZ_BlockMinAbs_Factor' in selected
+    )
+    if need_block:
         # WBZ-Fenster-Minimum von EoD_noSiBe (positiv).
         dates = pd.to_datetime(out['Datum'])
         eod = pd.to_numeric(out['EoD_Bestand_noSiBe'], errors='coerce').fillna(0).to_numpy()
@@ -912,13 +912,20 @@ def _compute_selected_labels(df: pd.DataFrame, selected: list[str]) -> pd.DataFr
             y = eod[mask]
             mmin = float(np.nanmin(y)) if y.size else 0.0
             block[i] = max(0.0, -mmin)
-        # optional Faktoren (wie im Hauptpfad), grob angenähert per Frequenz/Volatilität
-        # (bei Bedarf weiter verfeinern)
-        out['L_WBZ_BlockMinAbs'] = block
-    if 'L_HalfYear_Target' in selected:
-        # Ableitung aus vorhandenem Label, falls vorhanden
-        if 'LABLE_HalfYear_Target' in out.columns:
-            out['L_HalfYear_Target'] = pd.to_numeric(out['LABLE_HalfYear_Target'], errors='coerce')
+        need_factor = (
+            'L_WBZ_BlockMinAbs' in selected
+            or 'L_WBZ_BlockMinAbs_Factor' in selected
+        )
+        total_factor_arr = _compute_total_factor_by_halfyear(out) if need_factor else None
+        if 'L_WBZ_BlockMinAbs' in selected:
+            if total_factor_arr is not None:
+                out['L_WBZ_BlockMinAbs'] = block * (1.0 + total_factor_arr)
+            else:
+                out['L_WBZ_BlockMinAbs'] = block
+        if 'L_WBZ_BlockMinAbs_noFactors' in selected:
+            out['L_WBZ_BlockMinAbs_noFactors'] = block
+        if 'L_WBZ_BlockMinAbs_Factor' in selected and total_factor_arr is not None:
+            out['L_WBZ_BlockMinAbs_Factor'] = total_factor_arr
     return out
 
 
@@ -1086,17 +1093,24 @@ def _build_core_by_part(raw_dir: str, xlsx_path: str) -> dict[str, dict]:
 
         # SiBe-Verlauf per asof-Verknüpfung
         if 'SiBeVerlauf' in data:
-            sibe = data['SiBeVerlauf'][['Datum','Im Sytem hinterlgeter SiBe','Alter_SiBe']].copy()
+            use_cols = ['Datum', 'Im Sytem hinterlgeter SiBe']
+            if 'Alter_SiBe' in data['SiBeVerlauf'].columns:
+                use_cols.append('Alter_SiBe')
+            sibe = data['SiBeVerlauf'][use_cols].copy()
             sibe['Datum'] = pd.to_datetime(sibe['Datum'], errors='coerce').dt.floor('D'); sibe = sibe.dropna(subset=['Datum']).sort_values('Datum')
             merged = pd.merge_asof(feat.sort_values('Datum'), sibe, on='Datum', direction='backward')
             merged['Im Sytem hinterlgeter SiBe'] = pd.to_numeric(merged['Im Sytem hinterlgeter SiBe'], errors='coerce').fillna(0)
             # Backfill vor erstem Änderungsdatum mit Alter_SiBe (falls vorhanden)
-            try:
-                first_change = sibe['Datum'].min()
-                alter_val = pd.to_numeric(
-                    sibe.loc[sibe['Datum'] == first_change, 'Alter_SiBe'], errors='coerce'
-                ).iloc[0]
-            except Exception:
+            if 'Alter_SiBe' in sibe.columns:
+                try:
+                    first_change = sibe['Datum'].min()
+                    alter_val = pd.to_numeric(
+                        sibe.loc[sibe['Datum'] == first_change, 'Alter_SiBe'], errors='coerce'
+                    ).iloc[0]
+                except Exception:
+                    first_change = None
+                    alter_val = None
+            else:
                 first_change = None
                 alter_val = None
             if first_change is not None and pd.notna(alter_val):
@@ -1138,6 +1152,10 @@ def run_pipeline_selective(
     test_root = out_root.parent / f"{out_root.name}_Test"
     test_root.mkdir(parents=True, exist_ok=True)
 
+    labels = list(labels_to_build)
+    if 'L_WBZ_BlockMinAbs_noFactors' not in labels:
+        labels.append('L_WBZ_BlockMinAbs_noFactors')
+
     for part, bundle in core.items():
     # Für jedes Teil werden nun Features, Labels und Dateiablagen erzeugt.
         df = bundle["df"]
@@ -1147,14 +1165,14 @@ def run_pipeline_selective(
 
         # Berechnet die angeforderten Features und Labels.
         df_feat = _compute_selected_features(df, features_to_build)
-        df_lab = _compute_selected_labels(df_feat, labels_to_build)
+        df_lab = _compute_selected_labels(df_feat, labels)
 
         # Finale Auswahl: Pflichtspalten plus gewählte Features.
         locked = [
             'Teil', 'Datum', 'F_NiU_EoD_Bestand', 'F_NiU_Hinterlegter SiBe',
             'EoD_Bestand_noSiBe', 'WBZ_Days', 'Price_Material_var'
         ]
-        final_cols = [c for c in locked + features_to_build + labels_to_build if c in df_lab.columns]
+        final_cols = [c for c in locked + features_to_build + labels if c in df_lab.columns]
         out_full = df_lab[final_cols].copy()
 
         # Teilt per Export-Stichtag: Train <= cut_date, Test > cut_date.
@@ -1170,10 +1188,16 @@ def run_pipeline_selective(
         # Schreibt das historische Teilset (Features).
         part_dir = out_root / str(part)
         part_dir.mkdir(parents=True, exist_ok=True)
+        parquet_path = part_dir / 'features.parquet'
+        csv_path = part_dir / 'features.csv'
         try:
-            hist_df.to_parquet(part_dir / 'features.parquet', index=False)
+            hist_df.to_parquet(parquet_path, index=False, engine="pyarrow")
         except Exception:
-            hist_df.to_csv(part_dir / 'features.csv', index=False)
+            try:
+                hist_df.to_parquet(parquet_path, index=False)
+            except Exception as exc:
+                print(f"Warning: Parquet write failed for {parquet_path}: {exc}")
+        hist_df.to_csv(csv_path, index=False)
         try:
             hist_df.to_excel(part_dir / 'features.xlsx', index=False)
         except Exception:
@@ -1186,10 +1210,16 @@ def run_pipeline_selective(
             if c not in dispo_df.columns:
                 dispo_df[c] = np.nan
         dispo_df = dispo_df[out_full.columns]
+        parquet_path_t = part_dir_t / 'features.parquet'
+        csv_path_t = part_dir_t / 'features.csv'
         try:
-            dispo_df.to_parquet(part_dir_t / 'features.parquet', index=False)
+            dispo_df.to_parquet(parquet_path_t, index=False, engine="pyarrow")
         except Exception:
-            dispo_df.to_csv(part_dir_t / 'features.csv', index=False)
+            try:
+                dispo_df.to_parquet(parquet_path_t, index=False)
+            except Exception as exc:
+                print(f"Warning: Parquet write failed for {parquet_path_t}: {exc}")
+        dispo_df.to_csv(csv_path_t, index=False)
         try:
             dispo_df.to_excel(part_dir_t / 'features.xlsx', index=False)
         except Exception:

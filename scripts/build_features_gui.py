@@ -120,6 +120,10 @@ class App(tk.Tk):
             all_labs = data_pipeline.list_available_label_names()
         except Exception:
             all_labs = []
+        if 'L_WBZ_BlockMinAbs_noFactors' not in all_labs:
+            all_labs.append('L_WBZ_BlockMinAbs_noFactors')
+        if 'L_WBZ_BlockMinAbs_Factor' not in all_labs:
+            all_labs.append('L_WBZ_BlockMinAbs_Factor')
         for name in all_labs:
             var = tk.BooleanVar(value=False)
             self.label_vars[name] = var

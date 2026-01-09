@@ -7,9 +7,15 @@ Dieser Verlauf fasst die wichtigsten Schritte von der ursprünglichen Pipeline b
 - Erste Rolling‑Features: `DemandMean_*`, `DemandMax_*`.
 - Skripte: `train.py`, `evaluate.py`.
 
-## 2025‑09‑30
-- Einführung Ziel `L_HalfYear_Target`: halbjährlich konstanter Zielwert aus dem Maximum von `L_NiU_WBZ_BlockMinAbs` pro Halbjahr, leichte Faktoren (WBZ, Aktivität, Volatilität) vorsichtig berücksichtigt.
+## 2025-09-30
 - Anpassungen in `data_pipeline.py`, `train_model.py`, `evaluate_model.py` und Skripten.
+
+## 2025-11 (aktuell)
+- Rohdaten-Ordner in der Praxis auf `Rohdaten_Aktuell/` umgestellt (GUI/CLI weiterhin auswählbar).
+- Fokusmodell ist `xgb` (XGBoost); `gb`/`lgbm` bleiben optional für Tests.
+- Labels erweitert: `L_WBZ_BlockMinAbs_noFactors` und `L_WBZ_BlockMinAbs_Factor` ergänzen das Hauptziel.
+- Feature-Outputs schreiben `features.parquet` und `features.csv` parallel (zusätzlich zu `features.xlsx`).
+- Evaluierung ergänzt signierte prozentuale Abweichung und bessere Datums-Ticks in HTML-Plots.
 
 ## 2025‑10‑01
 - NiU‑Konventionen: `F_NiU_*` (Anzeige/Hilfs‑Features, nicht im Training), `L_NiU_*` (Diagnose‑Labels, nicht im Training). Training/Evaluierung schließen `F_NiU_`/`L_NiU_`/`nF_` automatisch aus.

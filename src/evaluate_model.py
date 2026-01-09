@@ -25,6 +25,81 @@ import numpy as np
 from .train_model import load_features, prepare_data
 
 
+def _percent_diff(y_true: pd.Series, y_pred: pd.Series) -> np.ndarray:
+    # Prozentuale Abweichung relativ zum Ziel (signed). 0/NaN -> NaN.
+    yt = pd.to_numeric(y_true, errors="coerce").to_numpy(dtype=float)
+    yp = pd.to_numeric(y_pred, errors="coerce").to_numpy(dtype=float)
+    denom = np.abs(yt)
+    out = np.full_like(yt, np.nan, dtype=float)
+    mask = denom > 0
+    out[mask] = (yp[mask] - yt[mask]) / denom[mask] * 100.0
+    return out
+
+
+def _mean_signed_percent(y_true: pd.Series, y_pred: pd.Series) -> float | None:
+    pct = _percent_diff(y_true, y_pred)
+    if np.all(np.isnan(pct)):
+        return None
+    return float(np.nanmean(pct))
+
+
+def _date_ticks(dates: pd.Series, count: int = 4) -> tuple[list[pd.Timestamp], list[str]] | tuple[None, None]:
+    d = pd.to_datetime(dates, errors="coerce").dropna()
+    if d.empty:
+        return None, None
+    start = d.min().normalize()
+    end = d.max().normalize()
+    if start == end:
+        ticks = [start]
+    else:
+        ticks = list(pd.date_range(start, end, periods=count))
+    # Entferne Duplikate, behalte Reihenfolge
+    seen = set()
+    uniq = []
+    for t in ticks:
+        if t in seen:
+            continue
+        seen.add(t)
+        uniq.append(t)
+    texts = [t.strftime("%Y-%m-%d") for t in uniq]
+    return uniq, texts
+
+
+def _compute_summary_metrics(frame: pd.DataFrame, target: str) -> dict[str, float | None]:
+    """Berechnet Vergleichsmetriken fuer einen Teil (Full-Time)."""
+    metrics: dict[str, float | None] = {}
+    pred_col = f"pred_{target}"
+    if pred_col not in frame.columns:
+        return metrics
+    actual_col = (
+        "F_NiU_Hinterlegter SiBe"
+        if "F_NiU_Hinterlegter SiBe" in frame.columns
+        else ("nF_Hinterlegter SiBe" if "nF_Hinterlegter SiBe" in frame.columns else "Hinterlegter SiBe")
+    )
+    label_col = target if target in frame.columns else None
+
+    def _safe_mape(y_true, y_pred):
+        try:
+            return mean_absolute_percentage_error(y_true, y_pred)
+        except Exception:
+            return None
+
+    if label_col:
+        metrics["mae_baseline_vs_label"] = float(mean_absolute_error(frame[label_col], frame[actual_col]))
+        metrics["rmse_baseline_vs_label"] = float(np.sqrt(mean_squared_error(frame[label_col], frame[actual_col])))
+        metrics["r2_baseline_vs_label"] = float(r2_score(frame[label_col], frame[actual_col]))
+        metrics["mape_baseline_vs_label"] = _safe_mape(frame[label_col], frame[actual_col])
+        metrics["mean_signed_pct_baseline_vs_label"] = _mean_signed_percent(frame[label_col], frame[actual_col])
+
+        metrics["mae_model_vs_label"] = float(mean_absolute_error(frame[label_col], frame[pred_col]))
+        metrics["rmse_model_vs_label"] = float(np.sqrt(mean_squared_error(frame[label_col], frame[pred_col])))
+        metrics["r2_model_vs_label"] = float(r2_score(frame[label_col], frame[pred_col]))
+        metrics["mape_model_vs_label"] = _safe_mape(frame[label_col], frame[pred_col])
+        metrics["mean_signed_pct_model_vs_label"] = _mean_signed_percent(frame[label_col], frame[pred_col])
+
+    return metrics
+
+
 # Prüft die Dispo-Rohdaten, um den Zeitraum der Disposition für eine Teilnummer zu bestimmen.
 def _dispo_date_range(raw_dir: str, part: str) -> Tuple[pd.Timestamp | None, pd.Timestamp | None]:
 # Ermittelt den ersten und letzten Dispo-Tag für ein Teil anhand der Rohdaten.
@@ -84,6 +159,7 @@ def _evaluate_range(
         if "F_NiU_Hinterlegter SiBe" in results.columns
         else ("nF_Hinterlegter SiBe" if "nF_Hinterlegter SiBe" in results.columns else "Hinterlegter SiBe")
     )
+    label_col = target if target in results.columns else None
     # Freundliche Bezeichnungen und Überschrift (Teil/WBZ)
     name_pred = "KI: Vorgeschlagener SiBe"
     name_eod = "Gesamtbestand ohne SiBe"
@@ -97,13 +173,29 @@ def _evaluate_range(
     wbz_val = results.get(wbz_col).iloc[0] if wbz_col and not results.empty else None
     wbz_txt = f" | WBZ: {int(wbz_val)} Tage" if isinstance(wbz_val, (int, float)) and pd.notna(wbz_val) else ""
     heading = f"Teil {part_txt}{wbz_txt}" if part_txt else (f"WBZ{wbz_txt}" if wbz_txt else "")
-    mae = mean_absolute_error(results[actual_col], results[pred_col])
-    rmse = np.sqrt(mean_squared_error(results[actual_col], results[pred_col]))
-    r2 = r2_score(results[actual_col], results[pred_col])
-    mape = mean_absolute_percentage_error(results[actual_col], results[pred_col])
-    print(
-        f"{prefix} MAE vs Hinterlegter SiBe: {mae:.3f} | RMSE: {rmse:.3f} | R2: {r2:.3f} | MAPE: {mape:.3f}"
-    )
+    if label_col:
+        base_mae = mean_absolute_error(results[label_col], results[actual_col])
+        base_rmse = np.sqrt(mean_squared_error(results[label_col], results[actual_col]))
+        base_r2 = r2_score(results[label_col], results[actual_col])
+        base_mape = mean_absolute_percentage_error(results[label_col], results[actual_col])
+        base_pct = _mean_signed_percent(results[label_col], results[actual_col])
+        base_pct_txt = f"{base_pct:+.2f}%" if base_pct is not None else "n/a"
+        print(
+            f"[Teil {part_txt or '-'}] {prefix} Baseline (Hinterlegter SiBe vs {label_col}): "
+            f"MAE {base_mae:.3f} | RMSE {base_rmse:.3f} | R2 {base_r2:.3f} | MAPE {base_mape:.3f} | RelDiff% {base_pct_txt}"
+        )
+        model_mae = mean_absolute_error(results[label_col], results[pred_col])
+        model_rmse = np.sqrt(mean_squared_error(results[label_col], results[pred_col]))
+        model_r2 = r2_score(results[label_col], results[pred_col])
+        model_mape = mean_absolute_percentage_error(results[label_col], results[pred_col])
+        model_pct = _mean_signed_percent(results[label_col], results[pred_col])
+        model_pct_txt = f"{model_pct:+.2f}%" if model_pct is not None else "n/a"
+        print(
+            f"[Teil {part_txt or '-'}] {prefix} Modell (Prediction vs {label_col}): "
+            f"MAE {model_mae:.3f} | RMSE {model_rmse:.3f} | R2 {model_r2:.3f} | MAPE {model_mape:.3f} | RelDiff% {model_pct_txt}"
+        )
+        results["pct_base_vs_label"] = _percent_diff(results[label_col], results[actual_col])
+        results["pct_pred_vs_label"] = _percent_diff(results[label_col], results[pred_col])
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     # Legt den Ausgabeordner an, falls er noch nicht existiert.
@@ -196,16 +288,19 @@ def _evaluate_range(
                 name_peak_combined,
             ),
         )
-        fig2.add_trace(
-            go.Scatter(
-                x=results["Datum"],
-                y=results[actual_col],
-                mode="lines",
-                name=name_actual_sibe,
-            ),
-            row=1,
-            col=1,
+        trace_actual = dict(
+            x=results["Datum"],
+            y=results[actual_col],
+            mode="lines",
+            name=name_actual_sibe,
         )
+        if "pct_base_vs_label" in results.columns:
+            trace_actual["customdata"] = results["pct_base_vs_label"]
+            trace_actual["hovertemplate"] = (
+                f"{name_actual_sibe}: %{{y:,.0f}}<br>"
+                "Abw. zum Label: %{customdata:.2f}%<extra></extra>"
+            )
+        fig2.add_trace(go.Scatter(**trace_actual), row=1, col=1)
         # Legt das tatsächliche Trainingslabel als mittelgraue Linie darüber (falls vorhanden)
         if target in results.columns:
             try:
@@ -223,16 +318,19 @@ def _evaluate_range(
                 row=1,
                 col=1,
             )
-        fig2.add_trace(
-            go.Scatter(
-                x=results["Datum"],
-                y=results[pred_col],
-                mode="lines",
-                name=name_pred,
-            ),
-            row=1,
-            col=1,
+        trace_pred = dict(
+            x=results["Datum"],
+            y=results[pred_col],
+            mode="lines",
+            name=name_pred,
         )
+        if "pct_pred_vs_label" in results.columns:
+            trace_pred["customdata"] = results["pct_pred_vs_label"]
+            trace_pred["hovertemplate"] = (
+                f"{name_pred}: %{{y:,.0f}}<br>"
+                "Abw. zum Label: %{customdata:.2f}%<extra></extra>"
+            )
+        fig2.add_trace(go.Scatter(**trace_pred), row=1, col=1)
         # EoD ohne SiBe (robust gegenueber NiU-Prefix)
         eod_col = _resolve_col(results, "EoD_Bestand_noSiBe")
         if eod_col:
@@ -313,6 +411,17 @@ def _evaluate_range(
         fig2.update_yaxes(title_text=name_combined, row=3, col=1)
         fig2.update_yaxes(title_text=name_peak, row=4, col=1)
         fig2.update_yaxes(title_text=name_peak_combined, row=5, col=1)
+        tick_vals, tick_text = _date_ticks(results["Datum"])
+        if tick_vals is not None and tick_text is not None:
+            for r in range(1, 6):
+                fig2.update_xaxes(
+                    tickmode="array",
+                    tickvals=tick_vals,
+                    ticktext=tick_text,
+                    showticklabels=True,
+                    row=r,
+                    col=1,
+                )
         fig2.update_xaxes(title_text="Datum", row=5, col=1)
         fig2.write_html(Path(output_dir) / f"{prefix}_predictions_over_time.html")
 
@@ -403,7 +512,10 @@ def run_evaluation(
     rmse = np.sqrt(mean_squared_error(y.iloc[test_idx], y_pred_test, multioutput="raw_values"))
     r2 = r2_score(y.iloc[test_idx], y_pred_test, multioutput="raw_values")
     mape = mean_absolute_percentage_error(y.iloc[test_idx], y_pred_test)
-    print("Test Metrics -> MAE:", mae, "RMSE:", rmse, "R2:", r2, "MAPE:", mape)
+    pct_list = []
+    for i, col in enumerate(y.columns):
+        pct_list.append(_mean_signed_percent(y.iloc[test_idx][col], pd.Series(y_pred_test[:, i])))
+    print("Test Metrics -> MAE:", mae, "RMSE:", rmse, "R2:", r2, "MAPE:", mape, "RelDiff%:", pct_list)
 
     # Vorhersagen für den gesamten Feature-Satz
     drop_cols = set(targets)
@@ -488,6 +600,8 @@ def run_evaluation(
             export_interactive_timeline=True,
         )
 
+    metrics_full = _compute_summary_metrics(results_full, targets[0]) if targets else {}
+
     # Trainingshistorie aus dem Modell
     if hasattr(model, "train_score_"):
         plt.figure()
@@ -512,11 +626,12 @@ def run_evaluation(
         "part": part,
         "full": results_full_view if results_full_view is not None else results_full,
         "dispo": results_dispo_view,
+        "metrics": metrics_full,
     }
 
 
 # Fasst die Ergebnisse vieler Teile zusammen und baut Gesamtberichte für alle Teile auf.
-def aggregate_all_parts(results_by_part: dict[str, pd.DataFrame | None], out_dir: str) -> None:
+def aggregate_all_parts(results_by_part: dict[str, pd.DataFrame | None], out_dir: str, metrics_by_part: Optional[dict[str, dict[str, float | None]]] = None) -> None:
     # Fasst die einzelnen Teil-Auswertungen zusammen und baut die Gesamtberichte.
     if not results_by_part:
         print("Keine Ergebnisse zur Aggregation - ueberspringe.")
@@ -524,6 +639,20 @@ def aggregate_all_parts(results_by_part: dict[str, pd.DataFrame | None], out_dir
 
     outp = Path(out_dir)
     outp.mkdir(parents=True, exist_ok=True)
+
+    if metrics_by_part:
+        try:
+            rows: list[dict[str, object]] = []
+            for part, vals in sorted(metrics_by_part.items()):
+                row: dict[str, object] = {"Teil": part}
+                if vals:
+                    row.update(vals)
+                rows.append(row)
+            if rows:
+                df_metrics = pd.DataFrame(rows)
+                df_metrics.to_excel(outp / "Alle_Teile_Metriken.xlsx", index=False)
+        except Exception as exc:
+            print(f"Metriken konnten nicht geschrieben werden: {exc}")
 
     raw_frames: list[pd.DataFrame] = []
     pred_name: Optional[str] = None
@@ -726,6 +855,17 @@ def aggregate_all_parts(results_by_part: dict[str, pd.DataFrame | None], out_dir
         title='Alle Teile - Aggregierte Entwicklung',
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
     )
+    tick_vals, tick_text = _date_ticks(daily['Datum'])
+    if tick_vals is not None and tick_text is not None:
+        for r in (1, 2):
+            fig.update_xaxes(
+                tickmode='array',
+                tickvals=tick_vals,
+                ticktext=tick_text,
+                showticklabels=True,
+                row=r,
+                col=1,
+            )
     fig.update_xaxes(title_text='Datum', row=1, col=1)
     fig.update_xaxes(title_text='Datum', row=2, col=1)
     fig.update_yaxes(title_text='Summe SiBe', row=1, col=1)
@@ -823,6 +963,17 @@ def aggregate_all_parts(results_by_part: dict[str, pd.DataFrame | None], out_dir
         title='Alle Teile - Aggregierte Entwicklung (ohne Forward-Fill)',
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
     )
+    tick_vals, tick_text = _date_ticks(daily_no_forward['Datum'])
+    if tick_vals is not None and tick_text is not None:
+        for r in (1, 2):
+            fig_no_forward.update_xaxes(
+                tickmode='array',
+                tickvals=tick_vals,
+                ticktext=tick_text,
+                showticklabels=True,
+                row=r,
+                col=1,
+            )
     fig_no_forward.update_xaxes(title_text='Datum', row=1, col=1)
     fig_no_forward.update_xaxes(title_text='Datum', row=2, col=1)
     fig_no_forward.update_yaxes(title_text='Summe SiBe', row=1, col=1)

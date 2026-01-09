@@ -28,7 +28,7 @@ class App(tk.Tk):
         self.v_model_dir = tk.StringVar(value=str(ROOT / "Modelle"))
         self.v_model_id = tk.StringVar(value="")
         self.v_models = tk.StringVar(value="gb")
-        self.v_targets = tk.StringVar(value="L_HalfYear_Target")
+        self.v_targets = tk.StringVar(value="L_WBZ_BlockMinAbs")
         self.v_estimators = tk.StringVar(value="700")
         self.v_lr = tk.StringVar(value="0.05")
         self.v_max_depth = tk.StringVar(value="3")

@@ -1,11 +1,11 @@
 # AGENTS_MAKE_ML
 
-Dieses Projekt baut aus Rohdaten tägliche Feature‑Tabellen je Teil und trainiert darauf ML‑Modelle zur Ableitung eines stabilen Sicherheitsbestands (SiBe). Die wichtigsten Ordner sind `Rohdaten/` (Quellen), `Features/` (generierte Merkmale), `Modelle/` (trainierte Modelle) sowie `plots/` (Auswertungen). `Spaltenbedeutung.xlsx` beschreibt die Spalten semantisch.
+Dieses Projekt baut aus Rohdaten tägliche Feature-Tabellen je Teil und trainiert darauf ML-Modelle zur Ableitung eines stabilen Sicherheitsbestands (SiBe). Die wichtigsten Ordner sind `Rohdaten_Aktuell/` (Quellen), `Features/` (generierte Merkmale), `Modelle/` (trainierte Modelle) sowie `plots/` (Auswertungen). `Spaltenbedeutung.xlsx` beschreibt die Spalten semantisch.
 
 ## Daten & Struktur
 
 ```
-Rohdaten/
+Rohdaten_Aktuell/
     20250313_M100_Bestand.csv
     20250313_M100_Dispo.csv
     20250313_M100_Lagerbew.csv
@@ -33,7 +33,7 @@ CSV‑Dateien sind typischerweise semikolon‑getrennt und enthalten Bestands‑
 - Weitere Feature‑Gruppen (Auszug):
   - Nachfrage: `DemandMean_*`, `DemandMax_*` inkl. Varianten `log1p`, `z_`, `robz`
   - Flags: `Flag_StockOut`; WBZ: `WBZ_Days`
-- Labels: `L_WBZ_BlockMinAbs` (Favorit für Training/Evaluierung), `L_NiU_WBZ_BlockMinAbs` (Diagnose), optional `L_HalfYear_Target` (abgeleitet, preisfaktorisiert)
+- Labels: `L_WBZ_BlockMinAbs` (Favorit für Training/Evaluierung), `L_WBZ_BlockMinAbs_noFactors` (ohne Faktoren), `L_WBZ_BlockMinAbs_Factor` (Endfaktor), `L_NiU_WBZ_BlockMinAbs` (Diagnose)
 - Lag‑Features (neu):
   - Punkt‑Lags: `Lag_EoD_Bestand_noSiBe_{7Tage,28Tage,wbzTage,2xwbzTage}`
   - Mittel‑Lags: `Lag_EoD_Bestand_noSiBe_mean_{7Tage,28Tage,wbzTage,2xwbzTage}`
@@ -52,7 +52,7 @@ Leistung: Große Zeiträume → höhere RAM/IO‑Last. Für Schnelltests nur wen
 python -m pip install -r requirements.txt
 ```
 
-Optional: `xgboost`, `lightgbm` für zusätzliche Modelle.
+Standard: `xgboost` (Hauptmodell). Optional: `lightgbm` für Experimente.
 
 ## Quickstart
 
@@ -64,7 +64,7 @@ python scripts/build_features_gui.py
 
 - Checkboxen für Features/Labels; Abhängigkeiten werden automatisch erfüllt (Basiswerte erscheinen nur, wenn gewünscht).
 - Fixe Basis (immer aktiv): `F_NiU_EoD_Bestand`, `F_NiU_Hinterlegter SiBe`, `EoD_Bestand_noSiBe`, `WBZ_Days`, `Price_Material_var`.
-- Ausgabe: `Features/<Teil>/features.parquet|xlsx` plus `build_selection.json` mit der gewählten Konfiguration. Für Tests wurde zusätzlich `GPT_Features_Test/` genutzt.
+- Ausgabe: `Features/<Teil>/features.parquet|csv|xlsx` plus `build_selection.json` mit der gewählten Konfiguration. Für Tests wurde zusätzlich `GPT_Features_Test/` genutzt.
 
 2) Training:
 
@@ -72,8 +72,8 @@ python scripts/build_features_gui.py
 python scripts/train.py
 ```
 
-- Interaktive Abfrage von Feature‑Pfad, Teil (oder `ALL`), Modelltyp (`gb`, optional `xgb`, `lgbm`), Hyperparametern und optionalem Progress‑Balken (`--progress` oder Prompt).
-- Standardmäßig wird `L_WBZ_BlockMinAbs` als Ziel vorgeschlagen; `L_HalfYear_Target` kann bei Bedarf explizit gewählt werden.
+- Interaktive Abfrage von Feature-Pfad, Teil (oder `ALL`), Modelltyp (`xgb` als Fokus; `gb`/`lgbm` optional), Hyperparametern und optionalem Progress-Balken (`--progress` oder Prompt).
+- Standardmäßig wird `L_WBZ_BlockMinAbs` als Ziel vorgeschlagen.
 - Modelle und Metriken landen unter `Modelle/<Teil|ALL>/<Modelltyp>/<ID>/`.
 
 3) Evaluierung:
@@ -92,15 +92,16 @@ python scripts/evaluate.py
 
 ## Training (Details)
 
-- Modelle: `gb` (scikit‑learn), optional `xgb`, `lgbm`.
+- Modelle: Fokus auf `xgb` (XGBoost). `gb`/`lgbm` sind optional und primär für Tests gedacht.
 - Gewichte: `none|blockmin|flag` inkl. Faktor (z. B. 5.0) per Prompt.
-- Progress‑Balken (parallel) für `gb` via `--progress` oder Abfrage.
+- Progress-Balken (parallel) nur für `gb` via `--progress` oder Abfrage.
 - Splits: Zeitreihen‑konform, optional CV‑Splits per Prompt.
-- Standard-Target ist `L_WBZ_BlockMinAbs`. `L_HalfYear_Target` steht optional zur Verfügung (preisfaktorisiert aus dem gleichen Fundament).
+- Standard-Target ist `L_WBZ_BlockMinAbs`.
 
 ## Evaluierung
 
 - Metriken: MAE, RMSE, R², MAPE (Vorsicht bei Ziel=0).
+- Konsole ergänzt signierte Prozent-Abweichung relativ zum Label.
 - Robuster Umgang mit Anzeige‑Spalten (`Hinterlegter SiBe` vs. `Hinterlegter_SiBe`).
 - Exporte: `*_predictions.csv|xlsx`, Plots als PNG/HTML unter `plots/...`.
 - Für ALL-Modelle entsteht zusätzlich `Alle_Teile/` mit:
@@ -118,6 +119,6 @@ python scripts/evaluate.py
 
 - `F_NiU_*`: Anzeige/Hilfsspalten, nicht fürs Training.
 - `L_NiU_*`: Diagnose‑Labels, nicht fürs Training.
-- Bevorzugtes Trainingsziel: `L_WBZ_BlockMinAbs` (direkt aus der Zeitreihe abgeleitet); `L_HalfYear_Target` steht zusätzlich als preisfaktorisiertes Derivat bereit.
+- Bevorzugtes Trainingsziel: `L_WBZ_BlockMinAbs` (direkt aus der Zeitreihe abgeleitet).
 - Train/Eval schließen `F_NiU_`/`L_NiU_`/`nF_` automatisch aus.
 

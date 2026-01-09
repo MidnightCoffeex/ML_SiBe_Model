@@ -33,11 +33,12 @@ def main() -> None:
     parser.add_argument("--model-id", help="Run identifier")
     parser.add_argument(
         "--models",
+        default="xgb",
         help="Comma separated model types (gb,xgb,lgbm) or 'ALL'",
     )
     parser.add_argument(
         "--targets",
-        default="L_HalfYear_Target",
+        default="L_WBZ_BlockMinAbs",
         help="Comma separated target column names",
     )
     parser.add_argument("--n_estimators", type=int)
@@ -61,8 +62,8 @@ def main() -> None:
 
     # Modelltyp-Abfrage (interaktiv, falls kein Parameter gesetzt wurde)
     if not args.models:
-        entry = input("Modelltyp(e) [gb|xgb|lgbm|ALL] [gb]: ")
-        args.models = entry.strip() if entry else "gb"
+        entry = input("Modelltyp(e) [gb|xgb|lgbm|ALL] [xgb]: ")
+        args.models = entry.strip() if entry else "xgb"
 
     # Hyperparameter mit kurzen Erklärungen abfragen
     if args.n_estimators is None:
@@ -85,9 +86,9 @@ def main() -> None:
             args.cv = 0
     # Target-Label interaktiv abfragen (optional mehrere, komma-getrennt)
     try:
-        current_targets = args.targets if isinstance(args.targets, str) else ""
+        current_targets = args.targets if isinstance(args.targets, str) else "L_WBZ_BlockMinAbs"
     except AttributeError:
-        current_targets = "L_HalfYear_Target"
+        current_targets = "L_WBZ_BlockMinAbs"
     entry = input(f"Target-Label(s) [{current_targets}]: ")
     if entry.strip():
         args.targets = entry.strip()
@@ -103,6 +104,11 @@ def main() -> None:
     if not has_progress:
         entry = input("Progress-Balken anzeigen? [y/N]: ").strip().lower()
         if entry in ("y", "j", "ja", "yes"): args.progress = True
+    # Early stopping (nur f\u00fcr XGB sinnvoll)
+    early_stop = True
+    entry = input("Early Stop verwenden? [Y]: ").strip().lower()
+    if entry in ("n", "no", "nein"):
+        early_stop = False
 
     part_name = args.part if args.part else "ALL"
 
@@ -121,7 +127,10 @@ def main() -> None:
 
     if args.part.upper() == "ALL":
         frames = []
-        for f in Path(args.data).glob('*/features.parquet'):
+        files = list(Path(args.data).glob('*/features.parquet'))
+        if not files:
+            files = list(Path(args.data).glob('*/features.csv'))
+        for f in files:
             frames.append(train_model.load_features(str(f)))
         df = pd.concat(frames, ignore_index=True)
         # global nach Datum (und Teil) sortieren
@@ -175,9 +184,15 @@ def main() -> None:
     if args.part.upper() == 'ALL' and (args.ts_scope or '').strip().lower() == 'local':
         # Ein ALL-Modell mit lokaler Reihenfolge: Teile nacheinander
         parts = sorted(p.parent.name for p in Path(args.data).glob('*/features.parquet'))
+        if not parts:
+            parts = sorted(p.parent.name for p in Path(args.data).glob('*/features.csv'))
         frames = []
         for p in parts:
-            df_p = pd.read_parquet(Path(args.data) / p / 'features.parquet')
+            part_dir = Path(args.data) / p
+            parquet_path = part_dir / 'features.parquet'
+            csv_path = part_dir / 'features.csv'
+            path = parquet_path if parquet_path.exists() else csv_path
+            df_p = train_model.load_features(str(path))
             df_p['Datum'] = pd.to_datetime(df_p['Datum'], errors='coerce')
             df_p = df_p.dropna(subset=['Datum']).sort_values(['Datum']).reset_index(drop=True)
             frames.append(df_p)
@@ -235,6 +250,7 @@ def main() -> None:
             weight_factor=args.weight_factor,
             selected_features=selected_features,
             progress=args.progress,
+            early_stop=early_stop,
         )
 
 

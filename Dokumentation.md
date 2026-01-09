@@ -7,17 +7,17 @@ Diese Dokumentation beschreibt Ziel, Datenbasis, Pipeline (Feature Engineering),
 ## 1. Zielsetzung
 
 - Ziel: Für jedes Teil einen stabilen, nachvollziehbaren Sicherheitsbestand (SiBe) ableiten.
-- Ansatz: Tägliche Zeitreihen je Teil, darauf ML‑Modelle (GB/XGB/LGBM) zur Schätzung eines halbjährlich konstanten Zielwerts.
+- Ansatz: Tägliche Zeitreihen je Teil, Fokusmodell XGB zur Schätzung von `L_WBZ_BlockMinAbs`. GB/LGBM sind optional und wurden primär für Tests vorbereitet.
 - Nutzen: Weniger Stockouts, stabilere Bestände, bessere Planbarkeit.
 
 ---
 
 ## 2. Datenquellen & Struktur
 
-- Rohdaten (`Rohdaten/`): Bestände (Stichtage), Bewegungen (Lagerbew), Disposition (Bedarf/Deckung), Teilestamm (inkl. WBZ), SiBe und SiBe‑Verlauf.
+- Rohdaten (`Rohdaten_Aktuell/`): Bestände (Stichtage), Bewegungen (Lagerbew), Disposition (Bedarf/Deckung), Teilestamm (inkl. WBZ), SiBe und SiBe-Verlauf.
 - Spaltenmapping: `Spaltenbedeutung.xlsx` (robuste Zuordnung trotz Encoding/Benennungsvarianten).
 - Ergebnisverzeichnisse:
-  - `Features/<Teil>/features.parquet|xlsx`
+  - `Features/<Teil>/features.parquet|csv|xlsx`
   - `Modelle/<Teil|ALL>/<Modelltyp>/<ID>/`
   - `plots/<Teil|ALL>/<Modelltyp>/<ID>/`
   - Test‑Ordner für Validierung: `GPT_Features_Test/`, `GPT_Pipeline_Test/`
@@ -49,7 +49,7 @@ Diese Dokumentation beschreibt Ziel, Datenbasis, Pipeline (Feature Engineering),
 - `Price_Material_var` kommt aus den `*_TeileWert.csv`-Exports, wird pro Teil als konstanter Stückpreis in jede Zeile geschrieben und steht dadurch für Label-Faktoren sowie Kapitalbindungs-Analysen bereit.
 - Nachfrage: `DemandMean_*`, `DemandMax_*` inkl. Varianten `log1p`, `z_`, `robz`.
 - Flags & Stammdaten: `Flag_StockOut`, `WBZ_Days`.
-- Labels: `L_WBZ_BlockMinAbs` (Favorit für Training/Evaluierung), `L_NiU_WBZ_BlockMinAbs` (Diagnose), optional `L_HalfYear_Target` (preisfaktorisiertes Derivat).
+- Labels: `L_WBZ_BlockMinAbs` (Favorit für Training/Evaluierung), `L_WBZ_BlockMinAbs_noFactors` (ohne Faktoren), `L_WBZ_BlockMinAbs_Factor` (Endfaktor), `L_NiU_WBZ_BlockMinAbs` (Diagnose)
 - Lag‑Features (neu):
   - Punkt‑Lags: `Lag_EoD_Bestand_noSiBe_{7Tage,28Tage,wbzTage,2xwbzTage}` = Wert genau vor X Tagen.
   - Mittel‑Lags: `Lag_EoD_Bestand_noSiBe_mean_{...}` = rückblickendes Fenster (ohne heutigen Tag).
@@ -78,8 +78,8 @@ Diese Dokumentation beschreibt Ziel, Datenbasis, Pipeline (Feature Engineering),
 
 ## 4. Training
 
-- Modelle: `gb` (sklearn Gradient Boosting), optional `xgb` (XGBoost), `lgbm` (LightGBM).
-- Standard-Ziel: `L_WBZ_BlockMinAbs` (direkt aus der Zeitreihe, bevorzugte Trainingsgröße); `L_HalfYear_Target` steht optional als preisfaktorisiertes Derivat bereit.
+- Modelle: Fokus auf `xgb` (XGBoost). `gb`/`lgbm` sind optional und primär für Tests gedacht.
+- Standard-Ziel: `L_WBZ_BlockMinAbs` (direkt aus der Zeitreihe, bevorzugte Trainingsgröße).
 - Gewichte: Schemata `none|blockmin|flag` plus Faktor (z. B. 5.0) per Prompt.
 - Splits: Zeitreihen‑konform, optional CV‑Splits.
 - Fortschritt: Optionaler Progress‑Balken parallel für `gb` via `--progress` oder Prompt.
@@ -88,7 +88,7 @@ Diese Dokumentation beschreibt Ziel, Datenbasis, Pipeline (Feature Engineering),
 
 ## 5. Evaluierung
 
-- Metriken: MAE, RMSE, R², MAPE (mit Vorsicht bei Ziel=0). Ergänzende service‑nahe Kennzahlen möglich.
+- Metriken: MAE, RMSE, R², MAPE (mit Vorsicht bei Ziel=0) plus prozentuale Abweichung relativ zum Label (signiert).
 - Robuste Anzeige‑Spalten: Toleranz bei `Hinterlegter SiBe` vs. `Hinterlegter_SiBe`.
 - Exporte: `*_predictions.csv|xlsx` und Plots (PNG/HTML) unter `plots/...`.
 - Aggregate für ALL-Modelle: `Alle_Teile.html` (Forward-Fill) und `Alle_Teile_no_forward.html` entstehen automatisch und zeigen pro Tag Summen für Hinterlegter/Vorgeschlagener SiBe sowie deren Kapitalbindung.

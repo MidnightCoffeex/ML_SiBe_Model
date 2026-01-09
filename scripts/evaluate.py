@@ -81,6 +81,7 @@ def main() -> None:
             base_plot_dir = Path(args.plots) / args.part / args.model_type / args.model_id
             target_list = [t.strip() for t in args.targets.split(',') if t.strip()]
             aggregate_inputs: dict[str, object] = {}
+            aggregate_metrics: dict[str, dict[str, float | None]] = {}
             for p in parts:
                 features_path = Path(args.features) / p / 'features.parquet'
                 plot_dir = base_plot_dir / p
@@ -110,13 +111,16 @@ def main() -> None:
                     full_frame = result_bundle.get("full")
                     if full_frame is not None:
                         aggregate_inputs[p] = full_frame
+                    metrics = result_bundle.get("metrics") if result_bundle else None
+                    if metrics is not None:
+                        aggregate_metrics[p] = metrics
                 if has_dispo_output:
                     for child in plot_dir.iterdir():
                         if child.name not in allowed_files and child.is_file():
                             child.unlink()
             # Nachdem jedes Teil ausgewertet wurde, entsteht die Gesamt-HTML in 'Alle_Teile'
             agg_dir = base_plot_dir / 'Alle_Teile'
-            evaluate_model.aggregate_all_parts(aggregate_inputs, str(agg_dir))
+            evaluate_model.aggregate_all_parts(aggregate_inputs, str(agg_dir), aggregate_metrics)
             return
 
     features_path = Path(args.features) / eval_part / 'features.parquet'
@@ -129,13 +133,8 @@ def main() -> None:
     if not args.targets:
         try:
             df_cols = train_model.load_features(str(features_path)).columns
-            if 'L_HalfYear_Target' in df_cols:
-                target_list = ['L_HalfYear_Target']
-            elif 'LABLE_HalfYear_Target' in df_cols:
-                target_list = ['LABLE_HalfYear_Target']
-            else:
-                # Fällt auf das Block-Label zurück, sofern vorhanden
-                target_list = ['L_WBZ_BlockMinAbs'] if 'L_WBZ_BlockMinAbs' in df_cols or 'L_NiU_WBZ_BlockMinAbs' in df_cols else []
+            # Fällt auf das Block-Label zurück, sofern vorhanden
+            target_list = ['L_WBZ_BlockMinAbs'] if 'L_WBZ_BlockMinAbs' in df_cols or 'L_NiU_WBZ_BlockMinAbs' in df_cols else []
         except Exception:
             target_list = []
     else:

@@ -22,6 +22,20 @@ import threading
 import time
 import os
 
+class _MultiOutputXGB:
+    """Einfache Multi-Output-Huelle fuer XGB-Regressoren (picklebar)."""
+
+    def __init__(self, estimators: list):
+        self.estimators_ = estimators
+        self.n_outputs_ = len(estimators)
+        first = estimators[0]
+        self.n_features_in_ = getattr(first, "n_features_in_", None)
+        self.feature_names_in_ = getattr(first, "feature_names_in_", None)
+
+    def predict(self, Xin):
+        preds = [est.predict(Xin) for est in self.estimators_]
+        return np.column_stack(preds)
+
 
 # Ermittelt pro Tag, wie stark der Bestand innerhalb eines WBZ-Zeitraums unter null fallen würde.
 def _compute_block_min_abs_label(df: pd.DataFrame, horizon_floor_days: int = 14) -> pd.Series:
@@ -48,36 +62,6 @@ def _compute_block_min_abs_label(df: pd.DataFrame, horizon_floor_days: int = 14)
     return pd.Series(out, index=df.index, name='L_WBZ_BlockMinAbs')
 
 
-# Glättet das Block-Minimum zu einem halbjählichen Richtwert, damit Empfehlungen stabil bleiben.
-def _compute_halfyear_label_from_block(df: pd.DataFrame, block_col: str = 'L_NiU_WBZ_BlockMinAbs') -> pd.Series:
-    # Leitet aus dem Block-Minimum ein halbjahreskonstantes Label ab (fensterweise Maximalwert).
-    if 'Datum' not in df.columns:
-        raise ValueError("'Datum' column required")
-    if block_col not in df.columns:
-        raise ValueError(f"'{block_col}' column required")
-    sdf = df[['Datum', block_col]].copy()
-    sdf['Datum'] = pd.to_datetime(sdf['Datum'], errors='coerce')
-    sdf = sdf.sort_values('Datum').reset_index()
-    dates = sdf['Datum'].tolist()
-    vals = pd.to_numeric(sdf[block_col], errors='coerce').fillna(0).to_numpy()
-    out = np.zeros(len(sdf), dtype=float)
-    i = 0
-    while i < len(sdf):
-        start = dates[i]
-        target = start + pd.DateOffset(months=6)
-        j = i
-        while j + 1 < len(sdf) and dates[j + 1] < target:
-            j += 1
-        if j + 1 < len(sdf) and dates[j] < target <= dates[j + 1]:
-            j = j + 1
-        window_max = float(np.nanmax(vals[i:j + 1])) if j >= i else float(vals[i])
-        out[i:j + 1] = window_max
-        i = j + 1
-    result = pd.Series(out, index=sdf['index'])
-    result = result.reindex(df.index).fillna(method='ffill').fillna(method='bfill')
-    result.name = 'L_HalfYear_Target'
-    return result
-
 # Lädt Feature-Dateien von der Festplatte und versucht zuerst das schnelle Parquet-Format zu verwenden.
 def load_features(path: str) -> pd.DataFrame:
     # Lädt vorberechnete Features bevorzugt aus Parquet und fällt bei Bedarf auf CSV zurück.
@@ -97,20 +81,6 @@ def load_features(path: str) -> pd.DataFrame:
 # Entfernt Anzeige-Spalten, stellt sicher, dass Ziele vorhanden sind und liefert X und y für das Training.
 def prepare_data(df: pd.DataFrame, targets: list[str], *, selected_features: list[str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     # Gibt Feature-Matrix X und Ziel y zurück, bereinigt Anzeige-Spalten und entfernt Zeilen mit fehlenden Targets.
-    # Stellt sicher, dass das Halbjahres-Label existiert; bei Bedarf aus BlockMinAbs ableiten.
-    # Berechnet das Halbjahres-Label bei Bedarf dynamisch (unterstützt den neuen Namen).
-    if 'L_HalfYear_Target' in targets and 'L_HalfYear_Target' not in df.columns:
-        df = df.copy()
-        # Nutzt möglichst das vorberechnete versteckte Block-Label, ansonsten wird es neu berechnet.
-        block_col = 'L_NiU_WBZ_BlockMinAbs'
-        if block_col not in df.columns:
-            # Versucht alte Namensvarianten beizubehalten, um kompatibel zu bleiben.
-            if 'L_WBZ_BlockMinAbs' in df.columns:
-                block_col = 'L_WBZ_BlockMinAbs'
-            else:
-                df['L_WBZ_BlockMinAbs'] = _compute_block_min_abs_label(df)
-                block_col = 'L_WBZ_BlockMinAbs'
-        df['L_HalfYear_Target'] = _compute_halfyear_label_from_block(df, block_col)
     missing = [t for t in targets if t not in df.columns]
     if missing:
         raise ValueError(f"Target column(s) {missing} not found in dataset")
@@ -127,6 +97,8 @@ def prepare_data(df: pd.DataFrame, targets: list[str], *, selected_features: lis
     # Entfernt alle Not-in-Use-Spalten.
     drop_cols.update([c for c in df.columns if isinstance(c, str) and (c.startswith("F_NiU_") or c.startswith("L_NiU_") or c.startswith("nF_"))])
     drop_cols.update([c for c in df.columns if isinstance(c, str) and ("LABLE" in c or "LABEL" in c)])
+    # Verhindert Leckage: alle übrigen Label-Spalten entfernen, außer den aktiven Targets.
+    drop_cols.update([c for c in df.columns if isinstance(c, str) and c.startswith("L_") and c not in targets])
     if selected_features:
         # Schneidet auf die erlaubte Featureliste zu.
         keep = [c for c in selected_features if c in df.columns and c not in drop_cols]
@@ -171,9 +143,45 @@ def train_xgboost_model(
     max_depth: int = 3,
     subsample: float = 1.0,
     sample_weight: np.ndarray | None = None,
+    eval_set: tuple[pd.DataFrame, pd.DataFrame] | None = None,
+    early_stopping_rounds: int | None = None,
 ) -> MultiOutputRegressor:
     # Trainiert einen Multi-Output-XGBoost-Regressor.
     from xgboost import XGBRegressor
+    import numpy as np
+
+    if eval_set is not None and early_stopping_rounds:
+        X_val, y_val = eval_set
+        estimators = []
+        for col in y.columns:
+            est = XGBRegressor(
+                n_estimators=n_estimators,
+                learning_rate=learning_rate,
+                max_depth=max_depth,
+                subsample=subsample,
+                objective="reg:squarederror",
+                random_state=0,
+            )
+            try:
+                est.fit(
+                    X,
+                    y[col],
+                    sample_weight=sample_weight,
+                    eval_set=[(X_val, y_val[col])],
+                    eval_metric="rmse",
+                    verbose=False,
+                    early_stopping_rounds=early_stopping_rounds,
+                )
+            except TypeError:
+                # Fallback falls early_stopping_rounds/ eval_metric nicht unterstuetzt sind
+                est.fit(
+                    X,
+                    y[col],
+                    sample_weight=sample_weight,
+                )
+            estimators.append(est)
+
+        return _MultiOutputXGB(estimators)
 
     base = XGBRegressor(
         n_estimators=n_estimators,
@@ -232,6 +240,8 @@ def run_training_df(
     weight_factor: float = 5.0,
     selected_features: list[str] | None = None,
     progress: bool = False,
+    early_stop: bool = False,
+    early_stopping_rounds: int = 20,
 ) -> tuple[list[float], list[float]]:
     # Trainiert ein Modell direkt auf einem bereits geladenen DataFrame.
     X, y = prepare_data(df, targets, selected_features=selected_features)
@@ -343,19 +353,60 @@ def run_training_df(
         m.estimators_ = estimators
         return m
 
+    def _log_early_stop_info(model_obj, phase: str) -> None:
+        """Gibt Hinweise aus, ob Early Stopping aktiv war (nur XGB)."""
+        if model_type != "xgb":
+            return
+        ests = getattr(model_obj, "estimators_", None)
+        best_iter = None
+        best_score = None
+        if ests:
+            for est in ests:
+                best_iter = getattr(est, "best_iteration", None)
+                if best_iter is None:
+                    best_iter = getattr(est, "best_ntree_limit", None)
+                best_score = getattr(est, "best_score", None)
+                if best_iter is not None:
+                    break
+        if best_iter is not None:
+            note = ""
+            if isinstance(best_score, (int, float)):
+                note = f", best_score={best_score:.4f}"
+            elif best_score is not None:
+                note = f", best_score={best_score}"
+            print(
+                f"{phase}: Early Stop aktiv -> beste Iteration {best_iter + 1}/{n_estimators}{note}"
+            )
+        else:
+            print(f"{phase}: Early Stop nicht aktiv (trainierte ca. {n_estimators} Iterationen)")
+
     # Erster Fit
     if model_type == "gb" and (progress or os.environ.get('TRAIN_PROGRESS') == '1'):
         model = _train_gb_with_progress(X.iloc[train_idx], y.iloc[train_idx], weights[train_idx], label="Training gb")
     else:
-        model = trainer(
-            X.iloc[train_idx],
-            y.iloc[train_idx],
-            n_estimators=n_estimators,
-            learning_rate=learning_rate,
-            max_depth=max_depth,
-            subsample=subsample,
-            sample_weight=weights[train_idx],
-        )
+        if model_type == "xgb" and early_stop:
+            model = trainer(
+                X.iloc[train_idx],
+                y.iloc[train_idx],
+                n_estimators=n_estimators,
+                learning_rate=learning_rate,
+                max_depth=max_depth,
+                subsample=subsample,
+                sample_weight=weights[train_idx],
+                eval_set=(X.iloc[val_idx], y.iloc[val_idx]),
+                early_stopping_rounds=early_stopping_rounds,
+            )
+        else:
+            model = trainer(
+                X.iloc[train_idx],
+                y.iloc[train_idx],
+                n_estimators=n_estimators,
+                learning_rate=learning_rate,
+                max_depth=max_depth,
+                subsample=subsample,
+                sample_weight=weights[train_idx],
+            )
+    _log_early_stop_info(model, "Training")
     val_pred = model.predict(X.iloc[val_idx])
     val_mae = mean_absolute_error(y.iloc[val_idx], val_pred, multioutput="raw_values")
     val_rmse = np.sqrt(mean_squared_error(y.iloc[val_idx], val_pred, multioutput="raw_values"))
@@ -366,15 +417,29 @@ def run_training_df(
     if model_type == "gb" and (progress or os.environ.get('TRAIN_PROGRESS') == '1'):
         model = _train_gb_with_progress(X.iloc[train_full_idx], y.iloc[train_full_idx], weights[train_full_idx], label="Refit gb")
     else:
-        model = trainer(
-            X.iloc[train_full_idx],
-            y.iloc[train_full_idx],
-            n_estimators=n_estimators,
-            learning_rate=learning_rate,
-            max_depth=max_depth,
-            subsample=subsample,
-            sample_weight=weights[train_full_idx],
-        )
+        if model_type == "xgb" and early_stop:
+            model = trainer(
+                X.iloc[train_full_idx],
+                y.iloc[train_full_idx],
+                n_estimators=n_estimators,
+                learning_rate=learning_rate,
+                max_depth=max_depth,
+                subsample=subsample,
+                sample_weight=weights[train_full_idx],
+                eval_set=(X.iloc[val_idx], y.iloc[val_idx]),
+                early_stopping_rounds=early_stopping_rounds,
+            )
+        else:
+            model = trainer(
+                X.iloc[train_full_idx],
+                y.iloc[train_full_idx],
+                n_estimators=n_estimators,
+                learning_rate=learning_rate,
+                max_depth=max_depth,
+                subsample=subsample,
+                sample_weight=weights[train_full_idx],
+            )
+    _log_early_stop_info(model, "Refit")
     Path(model_path).parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, model_path)
     print(f"Model saved to {model_path}")
@@ -484,6 +549,8 @@ def run_training(
     cv_splits: int | None = None,
     weight_scheme: str = "blockmin",
     weight_factor: float = 5.0,
+    early_stop: bool = False,
+    early_stopping_rounds: int = 20,
 ) -> None:
     df = load_features(features_path)
     X, _ = prepare_data(df, targets)
@@ -506,6 +573,8 @@ def run_training(
             split_indices=split_indices,
             weight_scheme=weight_scheme,
             weight_factor=weight_factor,
+            early_stop=early_stop,
+            early_stopping_rounds=early_stopping_rounds,
         )
 
 
@@ -523,7 +592,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--targets",
-        default="L_HalfYear_Target",
+        default="L_WBZ_BlockMinAbs",
         help="Comma separated target column names",
     )
     parser.add_argument("--n_estimators", type=int, default=100)
